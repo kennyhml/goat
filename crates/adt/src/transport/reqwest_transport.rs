@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
+use async_lock::Mutex;
 use async_trait::async_trait;
-use http::{HeaderMap, HeaderValue, header};
+use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use reqwest::cookie::{CookieStore, Jar};
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
 use crate::{AdtRequest, AdtResponse, ReqwestTransportBuildError, Transport, TransportError};
+
+const CSRF_TOKEN_HEADER: &str = "x-csrf-token";
+const CSRF_FETCH: &str = "Fetch";
 
 /// An ADT transport backed by `reqwest`.
 ///
@@ -17,9 +21,14 @@ use crate::{AdtRequest, AdtResponse, ReqwestTransportBuildError, Transport, Tran
 /// ADT `sap-contextid` cookies are excluded because they belong to individual
 /// [`UserSession`](crate::UserSession) values rather than the transport-wide
 /// security session.
+///
+/// Before the first mutating request, the transport fetches a CSRF token from
+/// core discovery and reuses it for subsequent requests in the same security
+/// session.
 pub struct ReqwestTransport {
     client: reqwest::Client,
     cookies: Arc<SapCookieStore>,
+    csrf_token: Mutex<Option<HeaderValue>>,
     destination: Url,
     username: String,
     password: SecretString,
@@ -98,6 +107,7 @@ impl ReqwestTransportBuilder {
         Ok(ReqwestTransport {
             client,
             cookies: cookie_store,
+            csrf_token: Mutex::new(None),
             destination,
             username: self
                 .username
@@ -115,7 +125,11 @@ impl Transport for ReqwestTransport {
         let (method, target, query, mut headers, body) = request.into_parts();
         let url = request_url(&self.destination, &target, &query).map_err(TransportError::new)?;
 
-        // Merge the cookies from stateful sessions in
+        if requires_csrf_token(&method) && !headers.contains_key(CSRF_TOKEN_HEADER) {
+            headers.insert(CSRF_TOKEN_HEADER, self.csrf_token().await?);
+        }
+
+        // Merge request-specific user-session cookies into the security session.
         merge_cookie_headers(&mut headers, self.cookies.cookies(&url))
             .map_err(TransportError::new)?;
 
@@ -131,6 +145,7 @@ impl Transport for ReqwestTransport {
 
         let status = response.status();
         let headers = response.headers().clone();
+        self.remember_csrf_token(&headers).await;
         let body = response
             .bytes()
             .await
@@ -138,6 +153,75 @@ impl Transport for ReqwestTransport {
             .to_vec();
         Ok(AdtResponse::new(status, headers, body))
     }
+}
+
+impl ReqwestTransport {
+    async fn csrf_token(&self) -> Result<HeaderValue, TransportError> {
+        let mut token = self.csrf_token.lock().await;
+        if let Some(token) = token.as_ref() {
+            return Ok(token.clone());
+        }
+
+        let fetched = self.fetch_csrf_token().await?;
+        *token = Some(fetched.clone());
+        Ok(fetched)
+    }
+
+    async fn fetch_csrf_token(&self) -> Result<HeaderValue, TransportError> {
+        let url = self
+            .destination
+            .join("/sap/bc/adt/core/discovery")
+            .map_err(TransportError::new)?;
+        let mut headers = HeaderMap::new();
+        headers.insert(CSRF_TOKEN_HEADER, HeaderValue::from_static(CSRF_FETCH));
+        merge_cookie_headers(&mut headers, self.cookies.cookies(&url))
+            .map_err(TransportError::new)?;
+
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .basic_auth(&self.username, Some(self.password.expose_secret()))
+            .send()
+            .await
+            .map_err(TransportError::new)?;
+        let status = response.status();
+        let token = response.headers().get(CSRF_TOKEN_HEADER).cloned();
+        response.bytes().await.map_err(TransportError::new)?;
+
+        if status != StatusCode::OK {
+            return Err(TransportError::new(CsrfTokenError::UnexpectedStatus(
+                status,
+            )));
+        }
+        token.ok_or_else(|| TransportError::new(CsrfTokenError::MissingToken))
+    }
+
+    async fn remember_csrf_token(&self, headers: &HeaderMap) {
+        let Some(token) = headers.get(CSRF_TOKEN_HEADER) else {
+            return;
+        };
+        if !matches!(token.to_str(), Ok(value) if value.eq_ignore_ascii_case("required") || value.eq_ignore_ascii_case(CSRF_FETCH))
+        {
+            *self.csrf_token.lock().await = Some(token.clone());
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum CsrfTokenError {
+    #[error("CSRF token request returned unexpected HTTP status {0}")]
+    UnexpectedStatus(StatusCode),
+
+    #[error("CSRF token response did not include x-csrf-token")]
+    MissingToken,
+}
+
+fn requires_csrf_token(method: &Method) -> bool {
+    !matches!(
+        *method,
+        Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE
+    )
 }
 
 #[derive(Debug, Default)]

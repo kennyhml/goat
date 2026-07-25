@@ -82,5 +82,98 @@ capabilities shared through `Arc`. It therefore has no borrowing lifetime and
 can be stored for an entire editing workflow. Requests through one session are
 serialized and carry its latest `sap-contextid`; separate user sessions retain
 independent context IDs while sharing the client's HTTP security session.
-Explicit server-side session cleanup is not implemented yet; dropping an
-instance currently only releases its local state.
+Call `UserSession::close()` when the workflow finishes. Dropping an instance
+only releases local state and does not notify SAP.
+
+## Resource references
+
+Resource references separate validated ADT locations from the operations that
+act on them:
+
+| Type | Represents | Created from |
+| --- | --- | --- |
+| `ObjectRef` | A lockable repository object | A validated `AdtUri`, a parsed URI, or a domain reference such as `ProgramRef` |
+| `SourceRef` | One source resource plus its owning object | `ObjectRef::main_source()` or `ObjectRef::source(...)` |
+| `ProgramRef` | A program object resolved through discovery | `Client<Discovered>::program(name)` |
+
+Constructing a reference performs no request. For a known object URI:
+
+```rust
+use goat_adt::{AccessMode, ObjectRef};
+
+# fn example() -> Result<(), Box<dyn std::error::Error>> {
+let structure = ObjectRef::parse(
+    "/sap/bc/adt/ddic/structures/ZSTRUCTURE",
+)?;
+let source = structure.main_source();
+let lock_operation = structure.lock(AccessMode::Modify);
+
+assert_eq!(&source.object, &structure);
+assert_eq!(
+    source.uri.as_str(),
+    "/sap/bc/adt/ddic/structures/ZSTRUCTURE/source/main",
+);
+let _ = lock_operation;
+# Ok(())
+# }
+```
+
+Keeping the owning `ObjectRef` inside `SourceRef` lets the update builder reject
+a `LockHandle` obtained for a different object before any request is sent.
+
+## Object editing
+
+Object locking and source updates are generic stateful operations. A
+`ProgramRef` resolves its object and source resources from central discovery:
+
+```rust,ignore
+use goat_adt::{AccessMode, Operation};
+
+let session = client.create_user_session();
+let program = client.program("ZDEMO")?;
+let lock_handle = program
+    .lock(AccessMode::Modify)
+    .execute(&session)
+    .await?;
+
+program
+    .source()
+    .update()
+    .lock_handle(lock_handle.clone())
+    .content("REPORT zdemo.\n")
+    .build()?
+    .execute(&session)
+    .await?;
+
+program.unlock(lock_handle)?.execute(&session).await?;
+session.close().await?;
+```
+
+When the owning resource is not otherwise needed, the equivalent lock-owned
+form is `lock_handle.remove().execute(&session).await?`.
+
+`ObjectRef::lock()` constructs an `ObjectLock` operation, while
+`SourceRef::update()` seeds an `ObjectSourceUpdateBuilder` with its validated
+source. `ObjectLock` parses SAP's opaque `LOCK_HANDLE` into a `LockHandle`; the
+update builder rejects a handle obtained for another object.
+The same operations can therefore edit programs, classes, DDIC structures, CDS
+sources, and other source-backed repository objects without duplicating their
+stateful protocol.
+
+The `UserSession` serializes both calls and carries the `sap-contextid` returned
+by the lock response into the update request. For example, a structure can use
+`ObjectRef::parse("/sap/bc/adt/ddic/structures/ZSTRUCTURE")?` and its
+`main_source()` with the same lock and update builders.
+
+The active development-handler diagnostics map both operations to
+`CL_SEDI_ADT_RES_PROGRAM`: method `POST` handles the lock and method `PUT`
+handles the source update. The routes are registered by
+`CL_SEDI_ADT_RES_APP_PROGRAMS->REGISTER_RESOURCES`. These class names are
+implementation details and are not part of the client contract.
+
+The complete workflow is covered by a mock HTTP test and has also been verified
+against the active SAP backend with `Z_TEST`: the client fetched its source,
+locked it, appended a test comment, updated it, unlocked it, and closed the
+user session. The updated source was fetched again to verify the change. The
+HTTP transport acquires and caches a CSRF token before mutating requests. Retry
+after a stale CSRF token is not implemented.

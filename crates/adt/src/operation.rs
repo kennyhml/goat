@@ -10,6 +10,7 @@ use crate::{
 
 const ADT_SESSION_TYPE: &str = "x-sap-adt-sessiontype";
 const STATEFUL_SESSION_TYPE: &str = "stateful";
+const STATELESS_SESSION_TYPE: &str = "stateless";
 const USER_SESSION_COOKIE: &str = "sap-contextid";
 
 mod private {
@@ -57,6 +58,10 @@ impl OperationKind for Stateful {}
 ///
 /// The operation's [`OperationKind`] and the client state determine which
 /// [`Executor`] can run it.
+///
+/// Consumers of the API should construct operations manually only in exceptional
+/// cases. In most scenarios, a callable operation can be constructed - or at least
+/// partially derived - from an existing context, such as an object reference.
 pub trait Operation<S: ClientState>: Send + Sync {
     type Response: Send;
     type Kind: OperationKind;
@@ -123,9 +128,9 @@ where
 /// one session are serialized, while separate sessions can hold independent
 /// `sap-contextid` values.
 ///
-/// A user session can retain locks and other server resources. Dropping this
-/// value does not yet close the server-side session; explicit cleanup must be
-/// added before stateful editing workflows are considered complete.
+/// A user session can retain locks and other server resources. Call
+/// [`UserSession::close`] when the workflow finishes; dropping this value only
+/// releases local state and does not notify SAP.
 pub struct UserSession<S: ClientState> {
     client: Client<S>,
     state: Mutex<UserSessionState>,
@@ -173,15 +178,23 @@ impl UserSessionState {
             ADT_SESSION_TYPE,
             HeaderValue::from_static(STATEFUL_SESSION_TYPE),
         );
-        if let Some(context_id) = &self.context_id {
-            let cookie = HeaderValue::from_str(&format!(
-                "{USER_SESSION_COOKIE}={}",
-                context_id.expose_secret()
-            ))
-            .map_err(TransportError::new)?;
+        if let Some(cookie) = self.cookie_header()? {
             request.headers_mut().append(header::COOKIE, cookie);
         }
         Ok(())
+    }
+
+    fn cookie_header(&self) -> Result<Option<HeaderValue>, TransportError> {
+        self.context_id
+            .as_ref()
+            .map(|context_id| {
+                HeaderValue::from_str(&format!(
+                    "{USER_SESSION_COOKIE}={}",
+                    context_id.expose_secret()
+                ))
+                .map_err(TransportError::new)
+            })
+            .transpose()
     }
 
     // Updates the session id based on the response. This may mean discarding the session
@@ -221,6 +234,37 @@ where
     /// Returns the client whose capabilities and transport this session uses.
     pub fn client(&self) -> &Client<S> {
         &self.client
+    }
+
+    /// Closes this SAP user session and releases its server-side resources.
+    ///
+    /// If no stateful response established a `sap-contextid`, this returns
+    /// without sending a request. Otherwise it performs a safe core-discovery
+    /// request carrying the context with `x-sap-adt-sessiontype: stateless`,
+    /// leaving the stateful backend session through an existing resource.
+    pub async fn close(self) -> Result<(), OperationError> {
+        let state = self.state.into_inner();
+        let Some(cookie) = state.cookie_header()? else {
+            return Ok(());
+        };
+        let target = crate::AdtUri::parse("/sap/bc/adt/core/discovery")
+            .expect("the static core-discovery URI is valid");
+        let mut request = AdtRequest::new(http::Method::GET, target);
+        request.headers_mut().insert(
+            ADT_SESSION_TYPE,
+            HeaderValue::from_static(STATELESS_SESSION_TYPE),
+        );
+        request.headers_mut().append(header::COOKIE, cookie);
+        let response = self.client.transport().send(request).await?;
+        if response.status() == http::StatusCode::OK {
+            Ok(())
+        } else {
+            Err(ResponseError::UnexpectedStatus {
+                status: response.status(),
+                body: String::from_utf8_lossy(response.body()).into_owned(),
+            }
+            .into())
+        }
     }
 }
 

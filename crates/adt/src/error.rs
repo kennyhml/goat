@@ -43,6 +43,37 @@ pub enum DiscoveryError {
     },
 }
 
+/// An error resolving a program resource from central discovery.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ProgramError {
+    #[error("program name `{name}` is empty or contains invalid whitespace or control characters")]
+    InvalidName { name: String },
+
+    #[error("central discovery did not advertise the programs collection")]
+    MissingCollection,
+
+    #[error("could not construct the program resource URI: {0}")]
+    InvalidTarget(#[from] AdtUriError),
+}
+
+/// An error in a generic ADT object operation or representation.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ObjectError {
+    #[error("invalid object lock response: {0}")]
+    InvalidLockResponse(#[from] serde_xml_rs::Error),
+
+    #[error("object lock response did not contain a lock handle")]
+    MissingLockHandle,
+
+    #[error("source response was not valid UTF-8: {0}")]
+    InvalidSourceEncoding(#[from] std::string::FromUtf8Error),
+
+    #[error("lock for `{actual}` cannot be used with object `{expected}`")]
+    LockHandleObjectMismatch { expected: String, actual: String },
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ResponseError {
@@ -51,6 +82,9 @@ pub enum ResponseError {
 
     #[error(transparent)]
     Discovery(#[from] DiscoveryError),
+
+    #[error(transparent)]
+    Object(#[from] ObjectError),
 }
 
 #[derive(Debug, Error)]

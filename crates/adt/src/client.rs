@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{Capabilities, DiscoveryQuery, Operation, OperationError, Transport, UserSession};
+use crate::{
+    Capabilities, DiscoveryQuery, Operation, OperationError, ProgramError, ProgramRef, Transport,
+    UserSession,
+};
 
 mod private {
     pub trait Sealed {}
@@ -79,6 +82,16 @@ impl Client<Discovered> {
     /// Returns the capabilities advertised by ADT.
     pub fn capabilities(&self) -> &Capabilities {
         &self.state.capabilities
+    }
+
+    /// Resolves a program reference from the discovered programs collection.
+    ///
+    /// The program name is encoded as a single path segment, so namespaced
+    /// names such as `/DMO/PROGRAM` are supported. See [`ProgramRef`] for an
+    /// example and for the relationship between its object and source
+    /// references.
+    pub fn program(&self, name: impl Into<String>) -> Result<ProgramRef, ProgramError> {
+        ProgramRef::resolve(self.capabilities(), name)
     }
 }
 

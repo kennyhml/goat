@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
+    <asx:values>
+        <DATA>
+            <LOCK_HANDLE>LOCK-HANDLE-1</LOCK_HANDLE>
+            <CORRNR />
+            <CORRUSER />
+            <CORRTEXT />
+            <IS_LOCAL>X</IS_LOCAL>
+            <IS_LINK_UP />
+            <MODIFICATION_SUPPORT>NoModification</MODIFICATION_SUPPORT>
+            <LINK_UP_MODE />
+            <CORR_LOCKS />
+            <CORR_CONTENTS />
+            <SCOPE_MESSAGES />
+        </DATA>
+    </asx:values>
+</asx:abap>
