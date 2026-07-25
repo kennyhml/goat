@@ -16,7 +16,7 @@ pub use discovery::{
 #[cfg(feature = "reqwest")]
 pub use error::ReqwestTransportBuildError;
 pub use error::{DiscoveryError, OperationError, ResponseError, TransportError};
-pub use operation::{Executor, Operation, OperationKind, Stateful, Stateless};
+pub use operation::{Executor, Operation, OperationKind, Stateful, Stateless, UserSession};
 pub use protocol::{AdtRequest, AdtResponse};
 pub use transport::Transport;
 #[cfg(feature = "reqwest")]

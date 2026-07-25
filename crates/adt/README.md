@@ -51,10 +51,36 @@ class names.
 Operations produce transport-neutral ADT requests. `ReqwestTransport` is the
 default HTTP implementation; other HTTP clients and future RFC-backed
 transports can implement the `Transport` trait. Stateless operations execute
-directly through `Client`; operations requiring a persistent ADT user context
+directly through `Client`; operations requiring a persistent SAP user session
 are represented separately as stateful operations.
+
+### SAP session terminology
+
+| Term | Representation | Purpose |
+| --- | --- | --- |
+| User context | `sap-usercontext` | Selects the SAP client and language. |
+| HTTP security session | `SAP_SESSIONID_*` and related cookies | Retains authenticated HTTP session state shared by requests from one transport. |
+| User session | `sap-contextid` | Retains stateful ABAP execution state across requests. Active sessions can be inspected in transaction `SM04`. |
+
+A user session is used for workflows such as editing a program, where a lock
+must remain valid across multiple requests. It is bound to the HTTP security
+session but has its own identity and lifecycle.
 
 `ReqwestTransport` sends the configured SAP client and language in the
 `sap-usercontext` cookie. They are intentionally not appended to every resource
 URI: some ADT handlers, including core discovery on tested systems, interpret
 all query parameters as operation-specific input.
+
+The transport retains response cookies in an RFC-aware, destination-scoped
+cookie store, allowing stateless operations to reuse the same SAP HTTP security
+session. It deliberately excludes `sap-contextid`: that cookie identifies one
+SAP user session and is owned by the corresponding `UserSession`
+rather than shared across every request.
+
+A `UserSession` owns a cheap clone of its client, with discovered
+capabilities shared through `Arc`. It therefore has no borrowing lifetime and
+can be stored for an entire editing workflow. Requests through one session are
+serialized and carry its latest `sap-contextid`; separate user sessions retain
+independent context IDs while sharing the client's HTTP security session.
+Explicit server-side session cleanup is not implemented yet; dropping an
+instance currently only releases its local state.

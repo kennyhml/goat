@@ -1,5 +1,16 @@
-use crate::{AdtRequest, AdtResponse, Client, ClientState, OperationError, ResponseError};
 use std::future::Future;
+
+use async_lock::Mutex;
+use http::{HeaderMap, HeaderValue, header};
+use secrecy::{ExposeSecret, SecretString};
+
+use crate::{
+    AdtRequest, AdtResponse, Client, ClientState, OperationError, ResponseError, TransportError,
+};
+
+const ADT_SESSION_TYPE: &str = "x-sap-adt-sessiontype";
+const STATEFUL_SESSION_TYPE: &str = "stateful";
+const USER_SESSION_COOKIE: &str = "sap-contextid";
 
 mod private {
     pub trait Sealed {}
@@ -7,24 +18,25 @@ mod private {
 
 /// Identifies whether an ADT operation is [`Stateless`] or [`Stateful`].
 ///
-/// Stateless operations do not require a persistent ADT user context. They may
+/// Stateless operations do not require a persistent ABAP user session. They may
 /// still use authentication and an HTTP security session.
 ///
-/// Stateful operations execute within a user context retained across requests.
+/// Stateful operations execute within a [`UserSession`] retained across requests.
 /// For example, updating a program requires a lock acquired and used within the
-/// same context. The context keeps the lock alive until it is released, closed,
-/// or expires.
+/// same user session. The session keeps the lock alive until it is released,
+/// closed, or expires.
 ///
-/// Requiring a context is part of the ADT operation contract. How that context
-/// is represented on the wire, such as an HTTP `sap-contextid` cookie, depends
-/// on the execution context and transport.
+/// SAP exposes these user sessions in transaction `SM04`. For HTTP ADT, the
+/// session is identified by the `sap-contextid` cookie. It is distinct from the
+/// HTTP security session and from the `sap-usercontext` cookie used to select
+/// the SAP client and language.
 pub trait OperationKind: private::Sealed + Send + Sync {}
 
-/// An operation that does not require a persistent ADT user context.
+/// An operation that does not require a persistent ABAP user session.
 #[derive(Debug)]
 pub struct Stateless;
 
-/// An operation that requires a persistent ADT user context.
+/// An operation that requires a persistent ABAP user session.
 #[derive(Debug)]
 pub struct Stateful;
 
@@ -72,7 +84,7 @@ pub trait Operation<S: ClientState>: Send + Sync {
 ///
 /// `Operation` describes how to build and decode a request, while `Executor`
 /// controls how that request is carried out. This separates the operations
-/// protocol contract from execution concerns such as user-context affinity,
+/// protocol contract from execution concerns such as user-session affinity,
 /// session headers, serialization, and transport access.
 ///
 /// The generic parameters express two independent requirements:
@@ -82,9 +94,8 @@ pub trait Operation<S: ClientState>: Send + Sync {
 ///
 /// [`Client<S>`](Client) implements this trait only for [`Stateless`]
 /// operations. Consequently, a [`Stateful`] operation cannot execute directly
-/// through a client. A stateful execution context can implement this trait
-/// while retaining the required ADT user context and delegating request
-/// delivery to its client.
+/// through a client. A [`UserSession`] implements this trait while retaining
+/// the required `sap-contextid` and delegating request delivery to its client.
 ///
 /// Callers should use [`Operation::execute`] rather than invoking this directly.
 pub trait Executor<S, O>: Send + Sync
@@ -99,6 +110,28 @@ where
     ) -> impl Future<Output = Result<O::Response, OperationError>> + Send;
 }
 
+/// A long-lived SAP user session for stateful ADT operations.
+///
+/// SAP calls the stateful ABAP context represented by `sap-contextid` a user
+/// session. Active user sessions can be inspected in transaction `SM04`. Do
+/// not confuse this with the transports HTTP security session, identified by
+/// `SAP_SESSIONID_*`, or the `sap-usercontext` client/language cookie.
+///
+/// The session owns a cheap clone of its [`Client`], so it has no borrowing
+/// lifetime and can be retained for an entire editing workflow. Client
+/// capabilities and the underlying transport remain shared. Requests within
+/// one session are serialized, while separate sessions can hold independent
+/// `sap-contextid` values.
+///
+/// A user session can retain locks and other server resources. Dropping this
+/// value does not yet close the server-side session; explicit cleanup must be
+/// added before stateful editing workflows are considered complete.
+pub struct UserSession<S: ClientState> {
+    client: Client<S>,
+    state: Mutex<UserSessionState>,
+}
+
+// Execution of a stateless request
 impl<S, O> Executor<S, O> for Client<S>
 where
     S: ClientState,
@@ -108,5 +141,179 @@ where
         let request = operation.request(self)?;
         let response = self.transport().send(request).await?;
         Ok(operation.decode(response)?)
+    }
+}
+
+// Execution of a stateful request
+impl<S, O> Executor<S, O> for UserSession<S>
+where
+    S: ClientState,
+    O: Operation<S, Kind = Stateful>,
+{
+    async fn execute(&self, operation: &O) -> Result<O::Response, OperationError> {
+        let mut session = self.state.lock().await;
+        let mut request = operation.request(&self.client)?;
+        session.decorate(&mut request)?;
+        let response = self.client.transport().send(request).await?;
+        session.update(response.headers());
+        Ok(operation.decode(response)?)
+    }
+}
+
+#[derive(Default)]
+struct UserSessionState {
+    context_id: Option<SecretString>,
+}
+
+impl UserSessionState {
+    // Attaches the internal session id cookie to the request headers to be
+    // merged by the transport layer later on if needed.
+    fn decorate(&self, request: &mut AdtRequest) -> Result<(), TransportError> {
+        request.headers_mut().insert(
+            ADT_SESSION_TYPE,
+            HeaderValue::from_static(STATEFUL_SESSION_TYPE),
+        );
+        if let Some(context_id) = &self.context_id {
+            let cookie = HeaderValue::from_str(&format!(
+                "{USER_SESSION_COOKIE}={}",
+                context_id.expose_secret()
+            ))
+            .map_err(TransportError::new)?;
+            request.headers_mut().append(header::COOKIE, cookie);
+        }
+        Ok(())
+    }
+
+    // Updates the session id based on the response. This may mean discarding the session
+    // if it has expired, or setting / renewing it.
+    fn update(&mut self, headers: &HeaderMap) {
+        for header in headers.get_all(header::SET_COOKIE) {
+            let Some(cookie) = header
+                .to_str()
+                .ok()
+                .and_then(|value| cookie::Cookie::parse(value.to_owned()).ok())
+                .filter(|cookie| cookie.name().eq_ignore_ascii_case(USER_SESSION_COOKIE))
+            else {
+                continue;
+            };
+
+            let expired = cookie.value_trimmed().is_empty()
+                || cookie
+                    .max_age()
+                    .is_some_and(|duration| duration.whole_seconds() <= 0);
+            self.context_id =
+                (!expired).then(|| SecretString::from(cookie.value_trimmed().to_owned()));
+        }
+    }
+}
+
+impl<S> UserSession<S>
+where
+    S: ClientState,
+{
+    pub(crate) fn new(client: Client<S>) -> Self {
+        Self {
+            client,
+            state: Mutex::new(UserSessionState::default()),
+        }
+    }
+
+    /// Returns the client whose capabilities and transport this session uses.
+    pub fn client(&self) -> &Client<S> {
+        &self.client
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex as StdMutex},
+    };
+
+    use async_trait::async_trait;
+    use http::{HeaderMap, Method, StatusCode};
+
+    use super::*;
+    use crate::{AdtUri, Transport, Undiscovered};
+
+    struct StatefulProbe;
+
+    impl Operation<Undiscovered> for StatefulProbe {
+        type Response = ();
+        type Kind = Stateful;
+
+        fn request(&self, _client: &Client<Undiscovered>) -> Result<AdtRequest, OperationError> {
+            Ok(AdtRequest::new(
+                Method::GET,
+                AdtUri::parse("/sap/bc/adt/stateful-probe").unwrap(),
+            ))
+        }
+
+        fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+            if response.status() == StatusCode::OK {
+                Ok(())
+            } else {
+                Err(ResponseError::UnexpectedStatus {
+                    status: response.status(),
+                    body: String::from_utf8_lossy(response.body()).into_owned(),
+                })
+            }
+        }
+    }
+
+    struct ContextFixtureTransport {
+        requests: Arc<StdMutex<Vec<HeaderMap>>>,
+        responses: StdMutex<VecDeque<AdtResponse>>,
+    }
+
+    #[async_trait]
+    impl Transport for ContextFixtureTransport {
+        async fn send(&self, request: AdtRequest) -> Result<AdtResponse, TransportError> {
+            self.requests
+                .lock()
+                .unwrap()
+                .push(request.headers().clone());
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| TransportError::new(std::io::Error::other("no fixture response")))
+        }
+    }
+
+    #[tokio::test]
+    async fn user_session_is_owned_and_reuses_its_context_id() {
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let mut context_headers = HeaderMap::new();
+        context_headers.insert(
+            header::SET_COOKIE,
+            HeaderValue::from_static("sap-contextid=context-1; Path=/sap/bc/adt"),
+        );
+        let transport = ContextFixtureTransport {
+            requests: Arc::clone(&requests),
+            responses: StdMutex::new(VecDeque::from([
+                AdtResponse::new(StatusCode::OK, context_headers, Vec::new()),
+                AdtResponse::new(StatusCode::OK, HeaderMap::new(), Vec::new()),
+            ])),
+        };
+        let session = Client::new(transport).create_user_session();
+
+        fn assert_static<T: 'static>(_value: &T) {}
+        assert_static(&session);
+        StatefulProbe.execute(&session).await.unwrap();
+        StatefulProbe.execute(&session).await.unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].get(ADT_SESSION_TYPE).unwrap(),
+            STATEFUL_SESSION_TYPE
+        );
+        assert!(!requests[0].contains_key(header::COOKIE));
+        assert_eq!(
+            requests[1].get(header::COOKIE).unwrap(),
+            "sap-contextid=context-1"
+        );
     }
 }

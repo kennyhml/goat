@@ -45,6 +45,7 @@ async fn client_discovery_transitions_and_retains_capabilities() {
         .discover()
         .await
         .unwrap();
+    let cloned_client = client.clone();
 
     let collection = client
         .capabilities()
@@ -60,6 +61,10 @@ async fn client_discovery_transitions_and_retains_capabilities() {
         ]
     );
     assert_eq!(collection.template_links().len(), 1);
+    assert!(std::ptr::eq(
+        client.capabilities(),
+        cloned_client.capabilities()
+    ));
 }
 
 #[tokio::test]
@@ -94,6 +99,57 @@ async fn reqwest_transport_sends_the_discovery_contract() {
             .capabilities()
             .collection(PROGRAMS_SCHEME, "programs")
             .is_some()
+    );
+}
+
+#[tokio::test]
+async fn reqwest_transport_reuses_security_session_cookies() {
+    let server = MockServer::start_async().await;
+    let core_discovery = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/core/discovery")
+                .header("cookie", "sap-usercontext=sap-client=001&sap-language=EN");
+            then.status(200)
+                .header("set-cookie", "SAP_SESSIONID_A4H_001=session; Path=/")
+                .body(CORE_DISCOVERY_XML);
+        })
+        .await;
+    let central_discovery_user_context_first = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/discovery").header(
+                "cookie",
+                "sap-usercontext=sap-client=001&sap-language=EN; SAP_SESSIONID_A4H_001=session",
+            );
+            then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let central_discovery_session_first = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/discovery").header(
+                "cookie",
+                "SAP_SESSIONID_A4H_001=session; sap-usercontext=sap-client=001&sap-language=EN",
+            );
+            then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let transport = ReqwestTransport::builder()
+        .destination(server.base_url())
+        .sap_client("001")
+        .language("EN")
+        .basic_auth("USER", "PASSWORD")
+        .build()
+        .unwrap();
+    let client = Client::new(transport);
+
+    CoreDiscoveryQuery.execute(&client).await.unwrap();
+    client.discover().await.unwrap();
+
+    core_discovery.assert_async().await;
+    assert_eq!(
+        central_discovery_user_context_first.hits_async().await
+            + central_discovery_session_first.hits_async().await,
+        1
     );
 }
 

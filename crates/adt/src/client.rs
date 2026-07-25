@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{Capabilities, DiscoveryQuery, Operation, OperationError, Transport};
+use crate::{Capabilities, DiscoveryQuery, Operation, OperationError, Transport, UserSession};
 
 mod private {
     pub trait Sealed {}
@@ -20,16 +20,16 @@ mod private {
 /// This state only indicates that central discovery has been loaded. It does
 /// not imply that every resource location is known; related resources may
 /// still need to be resolved from links in resource representations.
-pub trait ClientState: private::Sealed + Send + Sync {}
+pub trait ClientState: private::Sealed + Clone + Send + Sync {}
 
 /// The client has not fetched the server's ADT discovery document yet.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Undiscovered;
 
 /// The client has fetched and validated the server's ADT capabilities.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Discovered {
-    capabilities: Capabilities,
+    capabilities: Arc<Capabilities>,
 }
 
 impl private::Sealed for Undiscovered {}
@@ -45,6 +45,10 @@ impl ClientState for Discovered {}
 ///
 /// A transport may send ADT requests over HTTP directly or through an adapter,
 /// such as a future RFC bridge, without changing the operation API.
+///
+/// Because clients may be shared across different contexts, it must be possible
+/// to clone it cheaply.
+#[derive(Clone)]
 pub struct Client<S = Undiscovered> {
     transport: Arc<dyn Transport>,
     state: S,
@@ -64,7 +68,9 @@ impl Client<Undiscovered> {
         let capabilities = DiscoveryQuery.execute(&self).await?;
         Ok(Client {
             transport: self.transport,
-            state: Discovered { capabilities },
+            state: Discovered {
+                capabilities: Arc::new(capabilities),
+            },
         })
     }
 }
@@ -79,5 +85,13 @@ impl Client<Discovered> {
 impl<S: ClientState> Client<S> {
     pub(crate) fn transport(&self) -> &dyn Transport {
         self.transport.as_ref()
+    }
+
+    /// Creates an owned, long-lived SAP user session for stateful operations.
+    ///
+    /// The session is represented by `sap-contextid` over HTTP and can be
+    /// inspected in transaction `SM04` while active.
+    pub fn create_user_session(&self) -> UserSession<S> {
+        UserSession::new(self.clone())
     }
 }

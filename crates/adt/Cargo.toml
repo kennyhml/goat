@@ -11,9 +11,11 @@ default = ["reqwest"]
 reqwest = ["dep:reqwest"]
 
 [dependencies]
+async-lock = "3.4"
 async-trait = "0.1.88"
+cookie = "0.18"
 http = "1.3"
-reqwest = { version = "0.12", optional = true }
+reqwest = { version = "0.12", features = ["cookies"], optional = true }
 secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.8.1"

@@ -58,6 +58,17 @@ impl AdtRequest {
     pub fn set_body(&mut self, body: impl Into<Vec<u8>>) {
         self.body = body.into();
     }
+
+    /// Consumes the request and returns its transport-level components.
+    pub fn into_parts(self) -> (Method, AdtUri, Vec<(String, String)>, HeaderMap, Vec<u8>) {
+        (
+            self.method,
+            self.target,
+            self.query,
+            self.headers,
+            self.body,
+        )
+    }
 }
 
 /// A raw response returned by an ADT transport.

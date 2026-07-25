@@ -1,15 +1,26 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use http::{HeaderValue, header};
+use http::{HeaderMap, HeaderValue, header};
+use reqwest::cookie::{CookieStore, Jar};
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
 use crate::{AdtRequest, AdtResponse, ReqwestTransportBuildError, Transport, TransportError};
 
 /// An ADT transport backed by `reqwest`.
+///
+/// Each transport owns an RFC-aware cookie store seeded with the configured
+/// SAP client and language. Cookies returned by the SAP destination are
+/// retained according to their domain, path, security, and expiration rules.
+///
+/// ADT `sap-contextid` cookies are excluded because they belong to individual
+/// [`UserSession`](crate::UserSession) values rather than the transport-wide
+/// security session.
 pub struct ReqwestTransport {
     client: reqwest::Client,
+    cookies: Arc<SapCookieStore>,
     destination: Url,
-    sap_user_context: HeaderValue,
     username: String,
     password: SecretString,
 }
@@ -68,9 +79,6 @@ impl ReqwestTransportBuilder {
         }
         destination.set_path("/");
 
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
         let sap_client = self
             .sap_client
             .ok_or(ReqwestTransportBuildError::MissingField("sap_client"))?;
@@ -81,13 +89,16 @@ impl ReqwestTransportBuilder {
             .append_pair("sap-client", &sap_client)
             .append_pair("sap-language", &language)
             .finish();
-        let sap_user_context = HeaderValue::from_str(&format!("sap-usercontext={user_context}"))
-            .expect("form URL encoding produces a valid cookie header value");
+        let cookie_store = Arc::new(SapCookieStore::new(&destination, &user_context));
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .cookie_provider(Arc::clone(&cookie_store))
+            .build()?;
 
         Ok(ReqwestTransport {
             client,
+            cookies: cookie_store,
             destination,
-            sap_user_context,
             username: self
                 .username
                 .ok_or(ReqwestTransportBuildError::MissingField("username"))?,
@@ -101,16 +112,19 @@ impl ReqwestTransportBuilder {
 #[async_trait]
 impl Transport for ReqwestTransport {
     async fn send(&self, request: AdtRequest) -> Result<AdtResponse, TransportError> {
-        let url = request_url(&self.destination, &request).map_err(TransportError::new)?;
-        let mut headers = request.headers().clone();
-        headers.append(header::COOKIE, self.sap_user_context.clone());
+        let (method, target, query, mut headers, body) = request.into_parts();
+        let url = request_url(&self.destination, &target, &query).map_err(TransportError::new)?;
+
+        // Merge the cookies from stateful sessions in
+        merge_cookie_headers(&mut headers, self.cookies.cookies(&url))
+            .map_err(TransportError::new)?;
 
         let response = self
             .client
-            .request(request.method().clone(), url)
+            .request(method, url)
             .headers(headers)
             .basic_auth(&self.username, Some(self.password.expose_secret()))
-            .body(request.body().to_vec())
+            .body(body)
             .send()
             .await
             .map_err(TransportError::new)?;
@@ -126,11 +140,76 @@ impl Transport for ReqwestTransport {
     }
 }
 
-fn request_url(destination: &Url, request: &AdtRequest) -> Result<Url, url::ParseError> {
-    let mut url = destination.join(request.target().as_str())?;
-    if !request.query().is_empty() {
+#[derive(Debug, Default)]
+struct SapCookieStore {
+    jar: Jar,
+}
+
+impl SapCookieStore {
+    fn new(destination: &Url, user_context: &str) -> Self {
+        let jar = Jar::default();
+        jar.add_cookie_str(
+            &format!("sap-usercontext={user_context}; Path=/"),
+            destination,
+        );
+        Self { jar }
+    }
+}
+
+impl CookieStore for SapCookieStore {
+    fn set_cookies(&self, cookie_headers: &mut dyn Iterator<Item = &HeaderValue>, url: &Url) {
+        let cookies = cookie_headers
+            .filter(|header| !is_adt_context_cookie(header))
+            .collect::<Vec<_>>();
+        self.jar.set_cookies(&mut cookies.into_iter(), url);
+    }
+
+    fn cookies(&self, url: &Url) -> Option<HeaderValue> {
+        self.jar.cookies(url)
+    }
+}
+
+fn is_adt_context_cookie(header: &HeaderValue) -> bool {
+    header
+        .to_str()
+        .ok()
+        .and_then(|value| value.split_once('='))
+        .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case("sap-contextid"))
+}
+
+fn merge_cookie_headers(
+    headers: &mut HeaderMap,
+    session_cookies: Option<HeaderValue>,
+) -> Result<(), http::header::InvalidHeaderValue> {
+    let mut cookies = Vec::new();
+    if let Some(session_cookies) = session_cookies {
+        cookies.extend_from_slice(session_cookies.as_bytes());
+    }
+    for request_cookies in headers.get_all(header::COOKIE) {
+        if !cookies.is_empty() {
+            cookies.extend_from_slice(b"; ");
+        }
+        cookies.extend_from_slice(request_cookies.as_bytes());
+    }
+    if !cookies.is_empty() {
+        headers.insert(header::COOKIE, HeaderValue::from_bytes(&cookies)?);
+    }
+    Ok(())
+}
+
+fn request_url(
+    destination: &Url,
+    target: &crate::AdtUri,
+    query_parameters: &[(String, String)],
+) -> Result<Url, url::ParseError> {
+    let mut url = destination.join(target.as_str())?;
+    if !query_parameters.is_empty() {
         let mut query = url.query_pairs_mut();
-        query.extend_pairs(request.query().iter().map(|(name, value)| (name, value)));
+        query.extend_pairs(
+            query_parameters
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+        );
     }
     Ok(url)
 }
@@ -149,12 +228,50 @@ mod tests {
             AdtUri::parse("/sap/bc/adt/core/discovery").unwrap(),
         );
 
-        let url = request_url(&destination, &request).unwrap();
+        let url = request_url(&destination, request.target(), request.query()).unwrap();
 
         assert_eq!(url.query(), None);
         assert_eq!(
             url.as_str(),
             "https://sap.example.test/sap/bc/adt/core/discovery"
+        );
+    }
+
+    #[test]
+    fn cookie_store_keeps_security_session_but_excludes_adt_context() {
+        let destination = Url::parse("https://sap.example.test/").unwrap();
+        let store = SapCookieStore::new(&destination, "sap-client=001&sap-language=EN");
+        let session = HeaderValue::from_static("SAP_SESSIONID_A4H_001=session; Path=/");
+        let context = HeaderValue::from_static("sap-contextid=context; Path=/sap/bc/adt");
+
+        store.set_cookies(&mut [&session, &context].into_iter(), &destination);
+
+        let cookies = store.cookies(&destination).unwrap();
+        let cookies = cookies.to_str().unwrap();
+        assert!(cookies.contains("sap-usercontext=sap-client=001&sap-language=EN"));
+        assert!(cookies.contains("SAP_SESSIONID_A4H_001=session"));
+        assert!(!cookies.contains("sap-contextid"));
+    }
+
+    #[test]
+    fn merges_session_and_request_specific_cookies() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("sap-contextid=context"),
+        );
+
+        merge_cookie_headers(
+            &mut headers,
+            Some(HeaderValue::from_static(
+                "sap-usercontext=sap-client=001; SAP_SESSIONID_A4H_001=session",
+            )),
+        )
+        .unwrap();
+
+        assert_eq!(
+            headers.get(header::COOKIE).unwrap(),
+            "sap-usercontext=sap-client=001; SAP_SESSIONID_A4H_001=session; sap-contextid=context"
         );
     }
 }
