@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<app:service
+    xmlns:app="http://www.w3.org/2007/app"
+    xmlns:atom="http://www.w3.org/2005/Atom">
+    <app:workspace>
+        <atom:title>Programme</atom:title>
+        <app:collection href="/sap/bc/adt/programs/programs">
+            <atom:title>Programs</atom:title>
+            <app:accept>application/vnd.sap.adt.programs.programs.v2+xml</app:accept>
+            <app:accept>application/vnd.sap.adt.programs.programs.v3+xml</app:accept>
+            <atom:category
+                term="programs"
+                scheme="http://www.sap.com/adt/categories/programs" />
+            <adtcomp:templateLinks xmlns:adtcomp="http://www.sap.com/adt/compatibility">
+                <adtcomp:templateLink
+                    rel="http://www.sap.com/adt/categories/programs/valuehelp/application"
+                    template="/sap/bc/adt/programs/programs/{programname}/valuehelp/application" />
+            </adtcomp:templateLinks>
+        </app:collection>
+    </app:workspace>
+</app:service>

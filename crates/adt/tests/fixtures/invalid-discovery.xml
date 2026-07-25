@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<app:service
+    xmlns:app="http://www.w3.org/2007/app"
+    xmlns:atom="http://www.w3.org/2005/Atom">
+    <app:workspace>
+        <atom:title>Programs</atom:title>
+        <app:collection href="https://attacker.example/sap/public/programs/programs">
+            <atom:title>Programs</atom:title>
+            <atom:category
+                term="programs"
+                scheme="http://www.sap.com/adt/categories/programs" />
+        </app:collection>
+    </app:workspace>
+</app:service>
