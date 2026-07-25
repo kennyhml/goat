@@ -2,50 +2,9 @@
 
 Typed SAP ABAP Development Tools protocol support for the `goat` framework.
 
-The crate currently provides:
-
-- a typestate client that loads and retains central ADT capabilities;
-- typed operations for core and central discovery;
-- transport-neutral ADT requests and responses;
-- an HTTP transport with Basic authentication; and
-- parsed workspaces, collections, categories, accepted media types, and URI
-  template links.
-
-## Quick start
-
-Create a transport and run central discovery:
-
-```rust,no_run
-use goat_adt::{Client, ReqwestTransport};
-
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let transport = ReqwestTransport::builder()
-    .destination("https://sap.example.test")
-    .sap_client("001")
-    .language("EN")
-    .basic_auth("DEVELOPER", "secret")
-    .build()?;
-
-let client = Client::new(transport).discover().await?;
-
-let _programs = client.capabilities().collection(
-    "http://www.sap.com/adt/categories/programs",
-    "programs",
-);
-# Ok(())
-# }
-```
-
-`Client::discover()` consumes the `Client<Undiscovered>` and returns a
-`Client<Discovered>`. The discovered client retains the central capability
-document for subsequent operations.
-
-Collections should be selected by their category `scheme` and `term`, as in
-the example, rather than by title. Titles are display text and can be
-localized; the category pair is the stable protocol identity.
+Cleaner rewrite of [adt-query](https://github.com/kennyhml/adt-query) to better make use of HATEOAS.
 
 ## Discovery endpoints
-
 ADT exposes two AtomPub service documents with different roles:
 
 | Operation | Endpoint | Role |
@@ -89,7 +48,6 @@ endpoints can also be unavailable or unauthorized on production systems.
 class names.
 
 ## Execution model
-
 Operations produce transport-neutral ADT requests. `ReqwestTransport` is the
 default HTTP implementation; other HTTP clients and future RFC-backed
 transports can implement the `Transport` trait. Stateless operations execute
