@@ -17,26 +17,28 @@ pub use api::object::{
     ObjectLock, ObjectSourceQuery, ObjectSourceUpdate, ObjectSourceUpdateBuilder,
     ObjectSourceUpdateBuilderError, ObjectUnlock,
 };
-pub use api::program::{
-    ProgramMediaVersion, ProgramQuery, ProgramQueryBuilder, ProgramQueryBuilderError,
-    ProgramResponse,
+pub use api::programs::{
+    IncludeMediaVersion, IncludeQuery, IncludeQueryBuilder, IncludeQueryBuilderError,
+    IncludeResponse, ProgramMediaVersion, ProgramQuery, ProgramQueryBuilder,
+    ProgramQueryBuilderError, ProgramResponse,
 };
 pub use client::{Client, ClientState, Discovered, Undiscovered};
 #[cfg(feature = "reqwest")]
 pub use error::ReqwestTransportBuildError;
 pub use error::{
-    DiscoveryError, ObjectError, OperationError, ProgramError, ResponseError, TransportError,
+    DiscoveryError, IncludeError, ObjectError, OperationError, ProgramError, ResponseError,
+    TransportError,
 };
 pub use models::{
-    AccessMode, Capabilities, Category, Collection, LockHandle, Program, SourceCode,
+    AccessMode, Capabilities, Category, Collection, Include, LockHandle, Program, SourceCode,
     SyntaxConfiguration, SyntaxLanguage, TemplateLink, Workspace,
 };
 pub use operation::{Executor, Operation, OperationKind, Stateful, Stateless, UserSession};
 pub use protocol::{AdtRequest, AdtResponse};
 pub use resource::{
     AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, FromDiscovery, HtmlSourceRef,
-    ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef, ParserRef,
-    ProgramRef, SourceRef, SourceVersionsRef, TextElementsRef,
+    IncludeRef, ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef,
+    ParserRef, ProgramRef, SourceRef, SourceVersionsRef, TextElementsRef,
 };
 pub use transport::Transport;
 #[cfg(feature = "reqwest")]

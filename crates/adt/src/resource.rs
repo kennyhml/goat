@@ -2,7 +2,10 @@ use std::fmt;
 
 use url::Url;
 
-use crate::{AdtUri, AdtUriError, Capabilities, CategoryId, ProgramError, vocabulary::PROGRAMS};
+use crate::{
+    AdtUri, AdtUriError, Capabilities, CategoryId, IncludeError, ProgramError,
+    vocabulary::{INCLUDES, PROGRAMS},
+};
 const LINK_RESOLUTION_ORIGIN: &str = "https://adt.invalid";
 
 /// A concrete link advertised by an ADT resource representation.
@@ -435,6 +438,67 @@ impl FromDiscovery for ProgramRef {
     }
 }
 
+/// A standalone ABAP include resolved from the includes collection.
+///
+/// Includes share the ADT programs domain with [`ProgramRef`], but use their
+/// own discovery collection and representation contract.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct IncludeRef(ObjectRef);
+
+impl IncludeRef {
+    #[cfg(test)]
+    pub(crate) fn for_test(uri: AdtUri) -> Self {
+        Self(ObjectRef::new(uri))
+    }
+
+    /// Returns the include object reference.
+    pub fn object(&self) -> &ObjectRef {
+        &self.0
+    }
+
+    /// Returns the include object URI.
+    pub fn uri(&self) -> &AdtUri {
+        self.0.uri()
+    }
+
+    /// Returns the include's conventional `source/main` resource.
+    pub fn source(&self) -> SourceRef {
+        let uri = append_segments(self.uri(), ["source", "main"])
+            .expect("static include source path segments form a valid ADT URI");
+        SourceRef {
+            object: self.0.clone(),
+            uri,
+            query: Vec::new(),
+            fragment: None,
+            etag: None,
+        }
+    }
+}
+
+impl fmt::Display for IncludeRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromDiscovery for IncludeRef {
+    type Error = IncludeError;
+
+    const CATEGORY: CategoryId = INCLUDES;
+
+    fn from_discovery(
+        capabilities: &Capabilities,
+        include_name: &str,
+    ) -> Result<Self, Self::Error> {
+        validate_include_name(include_name)?;
+        let collection = capabilities
+            .collection(Self::CATEGORY.scheme, Self::CATEGORY.term)
+            .ok_or(IncludeError::MissingCollection)?;
+        let uri = append_segments(collection.target(), [include_name])?;
+        Ok(Self(ObjectRef::new(uri)))
+    }
+}
+
 impl SourceRef {
     pub(crate) fn from_link(object: ObjectRef, link: &AdtLink) -> Self {
         Self {
@@ -455,6 +519,19 @@ fn validate_program_name(program_name: &str) -> Result<(), ProgramError> {
     {
         return Err(ProgramError::InvalidName {
             name: program_name.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_include_name(include_name: &str) -> Result<(), IncludeError> {
+    if include_name.is_empty()
+        || include_name.trim() != include_name
+        || include_name.chars().any(char::is_control)
+        || matches!(include_name, "." | "..")
+    {
+        return Err(IncludeError::InvalidName {
+            name: include_name.to_owned(),
         });
     }
     Ok(())

@@ -13,6 +13,11 @@ pub(crate) const PROGRAMS: CategoryId = CategoryId {
     term: "programs",
 };
 
+pub(crate) const INCLUDES: CategoryId = CategoryId {
+    scheme: "http://www.sap.com/adt/categories/programs",
+    term: "includes",
+};
+
 /// Relations currently understood in program representations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Relation {

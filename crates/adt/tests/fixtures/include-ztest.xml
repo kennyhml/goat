@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<include:abapInclude
+    include:contextRefCount="0"
+    abapsource:sourceUri="source/main"
+    abapsource:fixPointArithmetic="false"
+    abapsource:activeUnicodeCheck="false"
+    adtcore:responsible="DEVELOPER"
+    adtcore:masterLanguage="EN"
+    adtcore:masterSystem="A4H"
+    adtcore:name="ZTEST"
+    adtcore:type="PROG/I"
+    adtcore:changedAt="2026-01-24T16:17:49Z"
+    adtcore:version="active"
+    adtcore:createdAt="2025-09-16T00:00:00Z"
+    adtcore:changedBy="DEVELOPER"
+    adtcore:description="testaatat"
+    adtcore:descriptionTextLimit="70"
+    adtcore:language="EN"
+    xmlns:include="http://www.sap.com/adt/programs/includes"
+    xmlns:abapsource="http://www.sap.com/adt/abapsource"
+    xmlns:adtcore="http://www.sap.com/adt/core"
+    xmlns:atom="http://www.w3.org/2005/Atom">
+    <atom:link
+        href="source/main/versions"
+        rel="http://www.sap.com/adt/relations/versions" />
+    <atom:link
+        href="source/main"
+        rel="http://www.sap.com/adt/relations/source"
+        type="text/plain"
+        etag="202601241617490011" />
+    <atom:link
+        href="source/main"
+        rel="http://www.sap.com/adt/relations/source"
+        type="text/html"
+        etag="202601241617490011" />
+    <atom:link
+        href="/sap/bc/adt/textelements/programs/ztest"
+        rel="http://www.sap.com/adt/relations/sources/textelements"
+        title="Text Elements" />
+    <atom:link
+        href="/sap/bc/adt/programs/includes/ztest/enhancements/implementations"
+        rel="http://www.sap.com/adt/relations/enhancementImplementations"
+        type="application/vnd.sap.adt.enhancementimplementations.v1+xml"
+        title="Enhancement Implementations" />
+    <atom:link
+        href="/sap/bc/adt/programs/includes/ztest/enhancements/options"
+        rel="http://www.sap.com/adt/relations/enhancementOptionsOfMainObject"
+        type="application/vnd.sap.adt.enhancementoptions.v2+xml"
+        title="Enhancement Options of Main Object" />
+    <atom:link
+        href="/sap/bc/adt/programs/includes/ztest/source/main/enhancements/options"
+        rel="http://www.sap.com/adt/relations/enhancementOptions"
+        type="application/vnd.sap.adt.enhancementoptions.v2+xml"
+        title="Enhancement Options" />
+    <adtcore:packageRef
+        adtcore:uri="/sap/bc/adt/packages/%24tmp"
+        adtcore:type="DEVC/K"
+        adtcore:name="$TMP" />
+</include:abapInclude>

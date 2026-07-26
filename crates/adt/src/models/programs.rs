@@ -1,9 +1,9 @@
 use serde::Deserialize;
 
 use crate::{
-    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, HtmlSourceRef, ObjectRef,
-    ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, ProgramError,
-    ProgramRef, SourceRef, SourceVersionsRef, TextElementsRef,
+    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, HtmlSourceRef, IncludeError,
+    IncludeRef, ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef,
+    ParserRef, ProgramError, ProgramRef, SourceRef, SourceVersionsRef, TextElementsRef,
     resource::{AdtLinkMetadata, resolve_href},
     vocabulary::{Relation, media_type},
 };
@@ -15,6 +15,15 @@ pub(crate) fn parse_program(
 ) -> Result<Program, ProgramError> {
     let raw: RawProgram = serde_xml_rs::from_reader(body).map_err(ProgramError::InvalidResponse)?;
     Program::from_raw(reference, raw, etag)
+}
+
+pub(crate) fn parse_include(
+    reference: IncludeRef,
+    body: &[u8],
+    etag: Option<String>,
+) -> Result<Include, IncludeError> {
+    let raw: RawInclude = serde_xml_rs::from_reader(body).map_err(IncludeError::InvalidResponse)?;
+    Include::from_raw(reference, raw, etag)
 }
 
 /// A fetched ABAP program descriptor normalized from V2 or V3 XML.
@@ -211,6 +220,183 @@ impl Program {
     }
 }
 
+/// A fetched standalone ABAP include descriptor.
+#[derive(Clone, Debug)]
+#[readonly::make]
+pub struct Include {
+    /// The include resource that was fetched.
+    pub reference: IncludeRef,
+
+    /// The include name supplied by SAP.
+    pub name: String,
+
+    /// The repository object type, normally `PROG/I`.
+    pub object_type: String,
+
+    /// The timestamp at which the include was last changed.
+    pub last_changed: String,
+
+    /// The object state, such as `active` or `inactive`.
+    pub version: ObjectVersion,
+
+    /// The timestamp at which the include was created.
+    pub created_at: String,
+
+    /// The user who last changed the include.
+    pub changed_by: String,
+
+    /// The include description.
+    pub description: String,
+
+    /// The maximum length of the include description.
+    pub description_text_limit: u32,
+
+    /// The include's logon language.
+    pub language: String,
+
+    /// Number of objects reported as using this include.
+    pub context_ref_count: u32,
+
+    /// The using object when SAP reports exactly one context.
+    pub context_ref: Option<ObjectRef>,
+
+    /// Whether fixed-point arithmetic is enabled.
+    pub fix_point_arithmetic: bool,
+
+    /// Whether the active Unicode check is enabled.
+    pub unicode_check_active: bool,
+
+    /// The user responsible for the include.
+    pub responsible: String,
+
+    /// The include's master language.
+    pub master_language: String,
+
+    /// The include's master system.
+    pub master_system: String,
+
+    /// The package containing the include.
+    pub package: PackageRef,
+
+    /// The advertised plain-text source representation.
+    pub source: SourceRef,
+
+    /// The advertised rendered HTML source representation.
+    pub html_source: Option<HtmlSourceRef>,
+
+    /// The source version-history resource.
+    pub versions: Option<SourceVersionsRef>,
+
+    /// The include's text-elements resource.
+    pub text_elements: Option<TextElementsRef>,
+
+    /// Enhancement implementations associated with the include.
+    pub enhancement_implementations: Option<EnhancementImplementationsRef>,
+
+    /// Enhancement options associated with the include object.
+    pub enhancement_options: Option<EnhancementOptionsRef>,
+
+    /// Enhancement options associated with the include source.
+    pub source_enhancement_options: Option<EnhancementOptionsRef>,
+
+    /// All links advertised by the include representation.
+    pub links: Vec<AdtLink>,
+
+    /// The entity tag of this include descriptor, when present.
+    pub etag: Option<String>,
+}
+
+impl Include {
+    fn from_raw(
+        reference: IncludeRef,
+        raw: RawInclude,
+        etag: Option<String>,
+    ) -> Result<Self, IncludeError> {
+        let package_object = ObjectRef::parse(&raw.package.uri).map_err(|source| {
+            IncludeError::InvalidPackageUri {
+                uri: raw.package.uri.clone(),
+                source,
+            }
+        })?;
+        let package = PackageRef::new(raw.package.name, raw.package.object_type, package_object);
+        let version = ObjectVersion::parse(&raw.version).ok_or_else(|| {
+            IncludeError::UnsupportedObjectVersion {
+                version: raw.version.clone(),
+            }
+        })?;
+        let links = resolve_include_links(reference.uri(), raw.links)?;
+        let source_link = find_link(&links, Relation::Source, Some(media_type::SOURCE))
+            .ok_or(IncludeError::MissingSourceLink)?;
+        let source = SourceRef::from_link(reference.object().clone(), source_link);
+        let declared_source = resolve_href(reference.uri(), &raw.source_uri).map_err(|source| {
+            IncludeError::InvalidLink {
+                href: raw.source_uri.clone(),
+                source,
+            }
+        })?;
+        if declared_source.target != source.uri {
+            return Err(IncludeError::SourceLinkMismatch {
+                declared: declared_source.target.to_string(),
+                advertised: source.uri.to_string(),
+            });
+        }
+
+        let context_ref = raw
+            .context_ref
+            .map(|context| {
+                resolve_href(reference.uri(), &context.uri)
+                    .map(|resolved| ObjectRef::new(resolved.target))
+                    .map_err(|source| IncludeError::InvalidContextUri {
+                        uri: context.uri,
+                        source,
+                    })
+            })
+            .transpose()?;
+        let html_source = find_link(&links, Relation::Source, Some(media_type::HTML))
+            .map(HtmlSourceRef::from_link);
+        let versions = typed_link::<SourceVersionsRef>(&links, Relation::Versions);
+        let text_elements = typed_link::<TextElementsRef>(&links, Relation::TextElements);
+        let enhancement_implementations = typed_link::<EnhancementImplementationsRef>(
+            &links,
+            Relation::EnhancementImplementations,
+        );
+        let enhancement_options =
+            typed_link::<EnhancementOptionsRef>(&links, Relation::ObjectEnhancementOptions);
+        let source_enhancement_options =
+            typed_link::<EnhancementOptionsRef>(&links, Relation::SourceEnhancementOptions);
+
+        Ok(Self {
+            reference,
+            name: raw.name,
+            object_type: raw.object_type,
+            last_changed: raw.last_changed,
+            version,
+            created_at: raw.created_at,
+            changed_by: raw.changed_by,
+            description: raw.description,
+            description_text_limit: raw.description_text_limit,
+            language: raw.language,
+            context_ref_count: raw.context_ref_count,
+            context_ref,
+            fix_point_arithmetic: raw.fix_point_arithmetic,
+            unicode_check_active: raw.unicode_check_active,
+            responsible: raw.responsible,
+            master_language: raw.master_language,
+            master_system: raw.master_system,
+            package,
+            source,
+            html_source,
+            versions,
+            text_elements,
+            enhancement_implementations,
+            enhancement_options,
+            source_enhancement_options,
+            links,
+            etag,
+        })
+    }
+}
+
 /// The source parser configuration advertised by a program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[readonly::make]
@@ -309,6 +495,31 @@ fn resolve_links(
         .collect()
 }
 
+fn resolve_include_links(
+    base: &crate::AdtUri,
+    links: Vec<RawAtomLink>,
+) -> Result<Vec<AdtLink>, IncludeError> {
+    links
+        .into_iter()
+        .map(|link| {
+            let href = link.href.clone();
+            AdtLink::from_href(
+                base,
+                link.href,
+                AdtLinkMetadata {
+                    relation: link.relation,
+                    media_type: link.media_type,
+                    hreflang: link.hreflang,
+                    title: link.title,
+                    length: link.length,
+                    etag: link.etag,
+                },
+            )
+            .map_err(|source| IncludeError::InvalidLink { href, source })
+        })
+        .collect()
+}
+
 #[derive(Deserialize)]
 #[serde(rename = "program:abapProgram")]
 struct RawProgram {
@@ -354,6 +565,55 @@ struct RawProgram {
     syntax_configuration: RawSyntaxConfiguration,
     #[serde(rename = "atom:link", default)]
     links: Vec<RawAtomLink>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename = "include:abapInclude")]
+struct RawInclude {
+    #[serde(rename = "@adtcore:name")]
+    name: String,
+    #[serde(rename = "@adtcore:type")]
+    object_type: String,
+    #[serde(rename = "@adtcore:changedAt")]
+    last_changed: String,
+    #[serde(rename = "@adtcore:version")]
+    version: String,
+    #[serde(rename = "@adtcore:createdAt")]
+    created_at: String,
+    #[serde(rename = "@adtcore:changedBy")]
+    changed_by: String,
+    #[serde(rename = "@adtcore:description")]
+    description: String,
+    #[serde(rename = "@adtcore:descriptionTextLimit")]
+    description_text_limit: u32,
+    #[serde(rename = "@adtcore:language")]
+    language: String,
+    #[serde(rename = "@include:contextRefCount", default)]
+    context_ref_count: u32,
+    #[serde(rename = "@abapsource:sourceUri")]
+    source_uri: String,
+    #[serde(rename = "@abapsource:fixPointArithmetic")]
+    fix_point_arithmetic: bool,
+    #[serde(rename = "@abapsource:activeUnicodeCheck")]
+    unicode_check_active: bool,
+    #[serde(rename = "@adtcore:responsible")]
+    responsible: String,
+    #[serde(rename = "@adtcore:masterLanguage")]
+    master_language: String,
+    #[serde(rename = "@adtcore:masterSystem")]
+    master_system: String,
+    #[serde(rename = "adtcore:packageRef")]
+    package: RawPackage,
+    #[serde(rename = "include:contextRef")]
+    context_ref: Option<RawObjectReference>,
+    #[serde(rename = "atom:link", default)]
+    links: Vec<RawAtomLink>,
+}
+
+#[derive(Deserialize)]
+struct RawObjectReference {
+    #[serde(rename = "@adtcore:uri")]
+    uri: String,
 }
 
 #[derive(Deserialize)]
@@ -405,6 +665,7 @@ mod tests {
     use super::*;
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
+    const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
 
     fn parse(body: &str) -> Result<Program, ProgramError> {
         parse_program(
@@ -438,6 +699,34 @@ mod tests {
                 .as_deref(),
             Some("757")
         );
+    }
+
+    #[test]
+    fn parses_include_response() {
+        let reference = IncludeRef::for_test(
+            crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
+        );
+        let include = parse_include(
+            reference.clone(),
+            INCLUDE_XML.as_bytes(),
+            Some("include-etag".to_owned()),
+        )
+        .unwrap();
+
+        assert_eq!(include.reference, reference);
+        assert_eq!(include.name, "ZTEST");
+        assert_eq!(include.object_type, "PROG/I");
+        assert_eq!(include.version, ObjectVersion::Active);
+        assert_eq!(include.context_ref_count, 0);
+        assert!(include.context_ref.is_none());
+        assert_eq!(include.package.name, "$TMP");
+        assert_eq!(include.links.len(), 7);
+        assert_eq!(
+            include.source.uri.as_str(),
+            "/sap/bc/adt/programs/includes/ZTEST/source/main"
+        );
+        assert_eq!(include.source.etag.as_deref(), Some("202601241617490011"));
+        assert_eq!(include.etag.as_deref(), Some("include-etag"));
     }
 
     #[test]

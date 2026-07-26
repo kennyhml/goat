@@ -1,8 +1,8 @@
 #![cfg(feature = "reqwest")]
 
 use goat_adt::{
-    AccessMode, Client, ObjectVersion, Operation, ProgramMediaVersion, ProgramRef, ProgramResponse,
-    ReqwestTransport,
+    AccessMode, Client, IncludeMediaVersion, IncludeRef, ObjectVersion, Operation,
+    ProgramMediaVersion, ProgramRef, ProgramResponse, ReqwestTransport,
 };
 use httpmock::prelude::*;
 
@@ -10,7 +10,79 @@ const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
 const LOCK_XML: &str = include_str!("fixtures/object-lock.xml");
 // Captured from live A4H. Its V2 and V3 response bodies were byte-identical.
 const PROGRAM_XML: &str = include_str!("fixtures/program-z-test.xml");
+const INCLUDE_XML: &str = include_str!("fixtures/include-ztest.xml");
 const SOURCE: &str = "REPORT z_goat_test.\nWRITE / 'updated'.\n";
+
+#[tokio::test]
+async fn include_query_converts_the_live_ztest_descriptor() {
+    let server = MockServer::start_async().await;
+    let discovery = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/discovery");
+            then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let metadata = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/programs/includes/ZTEST")
+                .query_param("version", "active")
+                .header("accept", "application/vnd.sap.adt.programs.includes.v2+xml")
+                .header("cache-control", "no-cache");
+            then.status(200)
+                .header(
+                    "content-type",
+                    "application/vnd.sap.adt.programs.includes.v2+xml; charset=utf-8",
+                )
+                .header("etag", "2026012416174900180")
+                .body(INCLUDE_XML);
+        })
+        .await;
+    let get_source = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/programs/includes/ZTEST/source/main")
+                .header("accept", "text/plain");
+            then.status(200).body(SOURCE);
+        })
+        .await;
+    let transport = ReqwestTransport::builder()
+        .destination(server.base_url())
+        .sap_client("001")
+        .language("EN")
+        .basic_auth("USER", "PASSWORD")
+        .build()
+        .unwrap();
+
+    let client = Client::new(transport).discover().await.unwrap();
+    let reference = client.object::<IncludeRef>("ZTEST").unwrap();
+    let response = reference
+        .query()
+        .priority([IncludeMediaVersion::V2])
+        .version(ObjectVersion::Active)
+        .build()
+        .unwrap()
+        .execute(&client)
+        .await
+        .unwrap();
+    assert_eq!(response.media_version(), Some(IncludeMediaVersion::V2));
+    let include = response.into_include().unwrap();
+    let source = include.source.query().execute(&client).await.unwrap();
+
+    assert_eq!(include.reference, reference);
+    assert_eq!(include.name, "ZTEST");
+    assert_eq!(include.object_type, "PROG/I");
+    assert_eq!(include.version, ObjectVersion::Active);
+    assert_eq!(include.context_ref_count, 0);
+    assert_eq!(include.package.name, "$TMP");
+    assert_eq!(include.links.len(), 7);
+    assert_eq!(include.etag.as_deref(), Some("2026012416174900180"));
+    assert_eq!(source.content, SOURCE);
+
+    discovery.assert_async().await;
+    metadata.assert_async().await;
+    get_source.assert_async().await;
+}
 
 #[tokio::test]
 async fn program_query_converts_the_live_z_test_v3_descriptor() {

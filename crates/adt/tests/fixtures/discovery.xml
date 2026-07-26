@@ -4,6 +4,13 @@
     xmlns:atom="http://www.w3.org/2005/Atom">
     <app:workspace>
         <atom:title>Programme</atom:title>
+        <app:collection href="/sap/bc/adt/programs/includes">
+            <atom:title>Includes</atom:title>
+            <app:accept>application/vnd.sap.adt.programs.includes.v2+xml</app:accept>
+            <atom:category
+                term="includes"
+                scheme="http://www.sap.com/adt/categories/programs" />
+        </app:collection>
         <app:collection href="/sap/bc/adt/programs/programs">
             <atom:title>Programs</atom:title>
             <app:accept>application/vnd.sap.adt.programs.programs.v2+xml</app:accept>

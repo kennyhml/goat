@@ -134,6 +134,7 @@ execution capabilities:
 | `ObjectRef` | A repository-object identity and location, without implied capabilities | A validated `AdtUri`, a parsed URI, or a domain reference such as `ProgramRef` |
 | `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable domain reference such as `ProgramRef` |
 | `ProgramRef` | A program object resolved through discovery | `Client<Discovered>::object::<ProgramRef>(name)` |
+| `IncludeRef` | A standalone ABAP include resolved through discovery | `Client<Discovered>::object::<IncludeRef>(name)` |
 | `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources advertised by object representations | A fetched resource such as `Program` |
 | `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
 
@@ -223,6 +224,32 @@ This conversion was verified against `Z_TEST` on the active A4H backend. V2
 and V3 returned byte-identical XML bodies for that program and distinct,
 correct response media types; a live `ProgramQuery` successfully converted all
 relations listed above.
+
+## Includes
+
+Standalone ABAP includes share the programs discovery scheme but use their own
+collection and V2 representation. Resolution and media negotiation follow the
+same split as programs:
+
+```rust,ignore
+use goat_adt::{IncludeRef, ObjectVersion, Operation};
+
+let reference = client.object::<IncludeRef>("ZINCLUDE")?;
+let include = reference
+    .query()
+    .version(ObjectVersion::Active)
+    .build()?
+    .execute(&client)
+    .await?
+    .into_include()
+    .expect("the descriptor was modified");
+let source = include.source.query().execute(&client).await?;
+println!("{}", source.content);
+```
+
+The include model retains its optional using-object context, package, source
+relations, enhancement relations, and descriptor ETag. The implementation was
+verified against `ZTEST` on the active A4H backend.
 
 ## Object editing
 

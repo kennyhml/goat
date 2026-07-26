@@ -7,7 +7,7 @@ use crate::{
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
     operation::{Operation, Stateful, Stateless},
     protocol::{AdtRequest, AdtResponse},
-    resource::{ObjectRef, ProgramRef, SourceRef},
+    resource::{IncludeRef, ObjectRef, ProgramRef, SourceRef},
     vocabulary::{PostAction, media_type, query_parameter},
 };
 
@@ -196,6 +196,27 @@ impl ProgramRef {
     }
 
     /// Creates an operation that releases this program's object lock.
+    pub fn unlock(&self, lock_handle: LockHandle) -> Result<ObjectUnlock, ObjectError> {
+        if self.object() != &lock_handle.object {
+            return Err(ObjectError::LockHandleObjectMismatch {
+                expected: self.to_string(),
+                actual: lock_handle.object.to_string(),
+            });
+        }
+        Ok(ObjectUnlock { lock_handle })
+    }
+}
+
+impl IncludeRef {
+    /// Creates an object-lock operation for this include.
+    pub fn lock(&self, access_mode: AccessMode) -> ObjectLock {
+        ObjectLock {
+            object: self.object().clone(),
+            access_mode,
+        }
+    }
+
+    /// Creates an operation that releases this include's object lock.
     pub fn unlock(&self, lock_handle: LockHandle) -> Result<ObjectUnlock, ObjectError> {
         if self.object() != &lock_handle.object {
             return Err(ObjectError::LockHandleObjectMismatch {

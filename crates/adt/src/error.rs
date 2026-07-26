@@ -95,6 +95,61 @@ pub enum ProgramError {
     },
 }
 
+/// An error resolving or decoding an ABAP include resource.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum IncludeError {
+    #[error("include name `{name}` is empty or contains invalid whitespace or control characters")]
+    InvalidName { name: String },
+
+    #[error("central discovery did not advertise the includes collection")]
+    MissingCollection,
+
+    #[error("could not construct the include resource URI: {0}")]
+    InvalidTarget(#[from] AdtUriError),
+
+    #[error("invalid include XML: {0}")]
+    InvalidResponse(#[source] serde_xml_rs::Error),
+
+    #[error("include link `{href}` could not be resolved: {source}")]
+    InvalidLink { href: String, source: AdtUriError },
+
+    #[error("include package URI `{uri}` is invalid: {source}")]
+    InvalidPackageUri { uri: String, source: AdtUriError },
+
+    #[error("include context URI `{uri}` is invalid: {source}")]
+    InvalidContextUri { uri: String, source: AdtUriError },
+
+    #[error("include response did not advertise a plain-text source link")]
+    MissingSourceLink,
+
+    #[error("invalid include entity tag: {0}")]
+    InvalidEntityTag(#[source] InvalidHeaderValue),
+
+    #[error(
+        "none of the preferred include representations {preferred:?} are advertised by the includes collection: {accepted:?}"
+    )]
+    UnsupportedRepresentation {
+        preferred: Vec<String>,
+        accepted: Vec<String>,
+    },
+
+    #[error("include response did not include a Content-Type header")]
+    MissingContentType,
+
+    #[error("unsupported include response Content-Type `{content_type}`")]
+    UnsupportedContentType { content_type: String },
+
+    #[error("unsupported include object version `{version}`")]
+    UnsupportedObjectVersion { version: String },
+
+    #[error("include source attribute `{declared}` disagrees with source relation `{advertised}`")]
+    SourceLinkMismatch {
+        declared: String,
+        advertised: String,
+    },
+}
+
 /// An error in a generic ADT object operation or representation.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -126,6 +181,9 @@ pub enum ResponseError {
 
     #[error(transparent)]
     Program(#[from] ProgramError),
+
+    #[error(transparent)]
+    Include(#[from] IncludeError),
 }
 
 #[derive(Debug, Error)]
