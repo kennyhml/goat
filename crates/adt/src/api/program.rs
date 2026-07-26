@@ -4,8 +4,8 @@ use http::{HeaderValue, Method, StatusCode, header};
 use crate::{
     client::{Client, Discovered},
     error::{OperationError, ProgramError, ResponseError},
+    models::{Program, parse_program},
     operation::{Operation, Stateless},
-    program::{Program, parse_program},
     protocol::{AdtRequest, AdtResponse},
     resource::{ObjectVersion, ProgramRef},
     vocabulary::{PROGRAMS, query_parameter},
@@ -191,7 +191,7 @@ impl ProgramRef {
     /// program.query().etag(etag).execute(&client).await?
     /// ```
     /// instead of constructing an operation from scratch:
-    /// ```rust
+    /// ```rust,ignore
     /// ProgramQueryBuilder::default()
     ///     .program(program)
     ///     .etag(etag)

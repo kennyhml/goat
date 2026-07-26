@@ -4,7 +4,7 @@ use http::{HeaderValue, Method, StatusCode, header};
 use crate::{
     client::{Client, ClientState},
     error::{ObjectError, OperationError, ResponseError},
-    object::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
+    models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
     operation::{Operation, Stateful, Stateless},
     protocol::{AdtRequest, AdtResponse},
     resource::{ObjectRef, ProgramRef, SourceRef},

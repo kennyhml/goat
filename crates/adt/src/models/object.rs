@@ -100,7 +100,7 @@ struct RawLockData {
 mod tests {
     use super::*;
 
-    const LOCK_XML: &[u8] = include_bytes!("../tests/fixtures/object-lock.xml");
+    const LOCK_XML: &[u8] = include_bytes!("../../tests/fixtures/object-lock.xml");
 
     #[test]
     fn parses_an_opaque_object_lock_handle() {

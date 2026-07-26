@@ -2,7 +2,7 @@ use http::{HeaderValue, Method, StatusCode, header};
 
 use crate::{
     AdtRequest, AdtResponse, AdtUri, Capabilities, Client, ClientState, Discovered, Operation,
-    OperationError, ResponseError, Stateless, Undiscovered, discovery::parse_capabilities,
+    OperationError, ResponseError, Stateless, Undiscovered, models::parse_capabilities,
     vocabulary::media_type,
 };
 

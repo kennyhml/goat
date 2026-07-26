@@ -404,7 +404,7 @@ struct RawAtomLink {
 mod tests {
     use super::*;
 
-    const PROGRAM_XML: &str = include_str!("../tests/fixtures/program-z-test.xml");
+    const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
 
     fn parse(body: &str) -> Result<Program, ProgramError> {
         parse_program(

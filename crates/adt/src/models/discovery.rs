@@ -331,8 +331,9 @@ mod tests {
     use super::*;
     use crate::vocabulary::PROGRAMS;
 
-    const DISCOVERY_XML: &[u8] = include_bytes!("../tests/fixtures/discovery.xml");
-    const INVALID_DISCOVERY_XML: &[u8] = include_bytes!("../tests/fixtures/invalid-discovery.xml");
+    const DISCOVERY_XML: &[u8] = include_bytes!("../../tests/fixtures/discovery.xml");
+    const INVALID_DISCOVERY_XML: &[u8] =
+        include_bytes!("../../tests/fixtures/invalid-discovery.xml");
 
     #[test]
     fn parses_discovery_capabilities() {

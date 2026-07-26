@@ -2,11 +2,9 @@
 
 mod api;
 mod client;
-mod discovery;
 mod error;
-mod object;
+mod models;
 mod operation;
-mod program;
 mod protocol;
 mod resource;
 mod uri;
@@ -24,15 +22,16 @@ pub use api::program::{
     ProgramResponse,
 };
 pub use client::{Client, ClientState, Discovered, Undiscovered};
-pub use discovery::{Capabilities, Category, Collection, TemplateLink, Workspace};
 #[cfg(feature = "reqwest")]
 pub use error::ReqwestTransportBuildError;
 pub use error::{
     DiscoveryError, ObjectError, OperationError, ProgramError, ResponseError, TransportError,
 };
-pub use object::{AccessMode, LockHandle, SourceCode};
+pub use models::{
+    AccessMode, Capabilities, Category, Collection, LockHandle, Program, SourceCode,
+    SyntaxConfiguration, SyntaxLanguage, TemplateLink, Workspace,
+};
 pub use operation::{Executor, Operation, OperationKind, Stateful, Stateless, UserSession};
-pub use program::{Program, SyntaxConfiguration, SyntaxLanguage};
 pub use protocol::{AdtRequest, AdtResponse};
 pub use resource::{
     AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, FromDiscovery, HtmlSourceRef,
