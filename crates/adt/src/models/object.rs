@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::{ObjectError, ObjectRef, SourceRef};
+use crate::{EntityTag, ObjectError, ObjectRef, SourceRef};
 
 /// A fetched source representation and its attached metadata.
 #[derive(Debug)]
@@ -15,11 +15,11 @@ pub struct SourceCode {
     pub content: String,
 
     /// The response entity tag supplied by SAP, when present.
-    pub etag: Option<String>,
+    pub etag: Option<EntityTag>,
 }
 
 impl SourceCode {
-    pub(crate) fn new(reference: SourceRef, content: String, etag: Option<String>) -> Self {
+    pub(crate) fn new(reference: SourceRef, content: String, etag: Option<EntityTag>) -> Self {
         Self {
             reference,
             content,

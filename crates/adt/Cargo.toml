@@ -21,6 +21,7 @@ readonly = "0.2.13"
 secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.8.1"
+std-uritemplate = "2.0"
 thiserror = "2.0"
 url = "2.5"
 

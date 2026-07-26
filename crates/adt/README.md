@@ -12,10 +12,12 @@ ADT exposes two AtomPub service documents with different roles:
 | `CoreDiscoveryQuery` | `/sap/bc/adt/core/discovery` | Small bootstrap document advertising infrastructure such as compatibility and batch resources. |
 | `DiscoveryQuery` | `/sap/bc/adt/discovery` | Central document advertising domain workspaces and collections such as programs. |
 
-Both operations have fixed URIs and can execute with either client state.
+Both operations have fixed URIs and require a logged-on client.
 `CoreDiscoveryQuery` returns its capabilities without changing the client state.
-`Client::discover()` specifically executes `DiscoveryQuery` and stores its
-result while transitioning the client to `Discovered`.
+`Client::new()` creates an `Unauthenticated` client, `Client::logon()` establishes
+the HTTP security session and transitions it to `LoggedOn`, and
+`Client::discover()` executes `DiscoveryQuery` and stores its result while
+transitioning the client to `Discovered`.
 
 Discovery is the top-level capability map, not a complete description of
 every ADT interaction. Later resource representations can advertise
@@ -77,11 +79,12 @@ session. It deliberately excludes `sap-contextid`: that cookie identifies one
 SAP user session and is owned by the corresponding `UserSession`
 rather than shared across every request.
 
-A `UserSession` owns a cheap clone of its client, with discovered
-capabilities shared through `Arc`. It therefore has no borrowing lifetime and
-can be stored for an entire editing workflow. Requests through one session are
-serialized and carry its latest `sap-contextid`; separate user sessions retain
-independent context IDs while sharing the client's HTTP security session.
+A `UserSession` owns a cheap clone of its logged-on client, with session
+information and discovered capabilities shared through `Arc`. It therefore has
+no borrowing lifetime and can be stored for an entire editing workflow. Requests
+through one session are serialized and carry its latest `sap-contextid`;
+separate user sessions retain independent context IDs while sharing the client's
+HTTP security session.
 Call `UserSession::close()` when the workflow finishes. Dropping an instance
 only releases local state and does not notify SAP.
 
@@ -92,7 +95,11 @@ by either discovery document on the tested A4H system:
 
 ```text
 GET /sap/bc/adt/core/http/sessions
-Content-Type: application/vnd.sap.adt.core.http.session.v3+xml
+Accept: application/vnd.sap.adt.core.http.session.v3+xml
+x-sap-security-session: create
+sap-adt-purpose: logon
+sap-adt-saplb: fetch
+sap-cancel-on-close: true
 ```
 
 Its response contains the current security-context reference, the configured
@@ -135,7 +142,7 @@ execution capabilities:
 | `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable domain reference such as `ProgramRef` |
 | `ProgramRef` | A program object resolved through discovery | `Client<Discovered>::object::<ProgramRef>(name)` |
 | `IncludeRef` | A standalone ABAP include resolved through discovery | `Client<Discovered>::object::<IncludeRef>(name)` |
-| `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources advertised by object representations | A fetched resource such as `Program` |
+| `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources advertised by object representations | Fetched properties such as `ProgramProperties` |
 | `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
 
 Named domain references implement `FromDiscovery`, allowing a discovered
@@ -167,12 +174,13 @@ Domain references expose only the conventions established for that resource
 type. Keeping the owning `ObjectRef` inside `SourceRef` lets the update builder
 reject a `LockHandle` obtained for a different object before any request is sent.
 
-## Program metadata
+## Program properties
 
 `ProgramRef::query()` defaults to V3 before V2. Callers can replace that order;
 the first preferred version advertised by central discovery is requested. Both
-wire versions normalize into `Program`, wrapped in the corresponding
-`ProgramResponse::V2` or `ProgramResponse::V3` variant:
+wire versions normalize into `ProgramProperties`, wrapped in the corresponding
+`ProgramPropertiesRepresentation::V2` or
+`ProgramPropertiesRepresentation::V3` variant:
 
 ```rust,ignore
 use goat_adt::{ObjectVersion, Operation, ProgramMediaVersion, ProgramRef};
@@ -182,35 +190,38 @@ let response = reference
     .query()
     .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
     .version(ObjectVersion::WorkingArea)
-    .build()?
     .execute(&client)
     .await?;
 println!("media version: {:?}", response.media_version());
 
-let program = response.into_program().expect("the descriptor was modified");
-let source = program.source.query().execute(&client).await?;
+let properties = response.into_properties();
+let source = properties.source.query().execute(&client).await?;
 
-assert_eq!(program.package.name, "$TMP");
-assert_eq!(program.syntax_configuration.language.version, "X");
-println!("text elements: {:?}", program.text_elements);
+assert_eq!(properties.package.name, "$TMP");
+assert_eq!(properties.syntax_configuration.language.version, "X");
+println!("text elements: {:?}", properties.text_elements);
 println!("{}", source.content);
 ```
 
-Supplying `.etag(cached_etag)` on the query builder sends `If-None-Match`
-instead of `Cache-Control: no-cache`. A current ETag produces
-`ProgramResponse::NotModified { etag }`; modified descriptors produce the V2 or
-V3 variant. The active A4H backend returns an ETag but no content type or body
-for `304 Not Modified`, so `media_version()` is `None` for that variant.
+An unconditional query returns `ProgramPropertiesRepresentation` directly. Calling
+`.if_none_match(cached_etag)` changes the query mode and its response type to
+`Conditional<ProgramPropertiesRepresentation>`. A current ETag produces
+`Conditional::NotModified { etag }`; a changed descriptor produces
+`Conditional::Modified(representation)`. An unsolicited `304 Not Modified` is
+rejected when no validator was supplied. HTTP response ETags are stored as
+validated `EntityTag` values, so passing a fetched ETag to `.if_none_match()`
+cannot fail during request construction. External strings can be validated with
+`value.parse::<EntityTag>()`.
 
 The optional version is typed as `ObjectVersion` and serializes to `active`,
 `inactive`, `workingArea`, `new`, or `partlyActive`. These values come directly
 from `IF_ADT_URI_QUERY_PARAMETERS`. `CL_SEDI_ADT_RES_SOURCE->GET` reads the
 parameter and `CL_ADT_UTILITY->GET_WB_VERSION` maps it to the Workbench's
 one-character `R3STATE`. Transient requests such as `WorkingArea` can therefore
-produce a returned `Program::version` of `Active` or `Inactive`.
+produce a returned `ProgramProperties::version` of `Active` or `Inactive`.
 
 The private Atom parser resolves every advertised link and retains it in
-`Program::links` or the nested `SyntaxLanguage::links`. This preserves unknown
+`ProgramProperties::links` or the nested `SyntaxLanguage::links`. This preserves unknown
 relations alongside `rel`, media type, title, language, length, query, fragment,
 and SAP ETag metadata. Known relations also produce `SourceRef`,
 `HtmlSourceRef`, `SourceVersionsRef`, `ObjectStructureRef`, `TextElementsRef`,
@@ -218,14 +229,33 @@ enhancement references, `ObjectStateRef`, and `ParserRef`. Bare relative,
 explicit `./`, root-relative, and query-bearing hrefs are resolved against the
 fetched program while their paths remain validated beneath `/sap/bc`.
 `ProgramRef::source()` remains the direct conventional `source/main` reference;
-`Program::source` is the location advertised by SAP.
+`ProgramProperties::source` is the location advertised by SAP.
 
 This conversion was verified against `Z_TEST` on the active A4H backend. V2
 and V3 returned byte-identical XML bodies for that program and distinct,
-correct response media types; a live `ProgramQuery` successfully converted all
-relations listed above.
+correct response media types; a live `ProgramPropertiesQuery` successfully
+converted all relations listed above.
 
-## Includes
+## Program execution
+
+`ProgramRef::run()` executes a program through the `programrun` URI template
+advertised by central discovery and returns its rendered plain-text output:
+
+```rust,ignore
+use goat_adt::{Operation, ProgramRef};
+
+let program = client.object::<ProgramRef>("ZDEMO")?;
+let output = program.run().build()?.execute(&client).await?;
+println!("{}", output.content);
+```
+
+Program names are canonicalized to uppercase when their references are created.
+The operation is stateless, although its `POST` request still causes the HTTP
+transport to acquire a CSRF token. An optional profiler trace can be attached
+with `.profiler_id(id)` when the discovered template advertises that variable.
+Selection-screen parameters are not supported by this endpoint.
+
+## Include properties
 
 Standalone ABAP includes share the programs discovery scheme but use their own
 collection and V2 representation. Resolution and media negotiation follow the
@@ -235,21 +265,21 @@ same split as programs:
 use goat_adt::{IncludeRef, ObjectVersion, Operation};
 
 let reference = client.object::<IncludeRef>("ZINCLUDE")?;
-let include = reference
+let properties = reference
     .query()
     .version(ObjectVersion::Active)
-    .build()?
     .execute(&client)
     .await?
-    .into_include()
-    .expect("the descriptor was modified");
-let source = include.source.query().execute(&client).await?;
+    .into_properties();
+let source = properties.source.query().execute(&client).await?;
 println!("{}", source.content);
 ```
 
-The include model retains its optional using-object context, package, source
-relations, enhancement relations, and descriptor ETag. The implementation was
-verified against `ZTEST` on the active A4H backend.
+`IncludeProperties` retains its optional using-object context, package, source
+relations, enhancement relations, and properties ETag. The implementation was
+verified against `ZTEST` on the active A4H backend. `IncludePropertiesQuery`
+supports the same `.if_none_match(etag)` transition and `Conditional` response
+as program properties.
 
 ## Object editing
 

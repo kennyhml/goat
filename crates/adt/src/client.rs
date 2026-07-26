@@ -1,41 +1,63 @@
 use std::sync::Arc;
 
-use crate::{Capabilities, FromDiscovery, Transport, UserSession};
+use crate::{
+    Capabilities, CategoryId, Collection, FromDiscovery, SessionInformation, Transport, UserSession,
+};
 
 mod private {
     pub trait Sealed {}
 }
 
-/// Marker for the central-discovery state of an ADT client.
+/// Marker for the protocol lifecycle state of an ADT client.
 ///
 /// ADT advertises top-level collections, URI templates, and accepted media
 /// types through `/sap/bc/adt/discovery`. Operations that require those
 /// capabilities implement `Operation<Discovered>`, preventing their execution
-/// by an undiscovered client.
-///
-/// Fixed bootstrap operations such as `CoreDiscoveryQuery` and
-/// `DiscoveryQuery` can execute in either client state because their locations
-/// are known in advance.
-///
-/// This state only indicates that central discovery has been loaded. It does
-/// not imply that every resource location is known; related resources may
-/// still need to be resolved from links in resource representations.
+/// by a client that has not completed discovery. Other authenticated operations
+/// accept any [`LoggedOnState`].
 pub trait ClientState: private::Sealed + Clone + Send + Sync {}
 
-/// The client has not fetched the server's ADT discovery document yet.
-#[derive(Clone, Debug, Default)]
-pub struct Undiscovered;
+/// A client state carrying an authenticated HTTP security session.
+pub trait LoggedOnState: ClientState {
+    #[doc(hidden)]
+    fn session_information(&self) -> &SessionInformation;
+}
 
-/// The client has fetched and validated the server's ADT capabilities.
+/// The client has not established an authenticated ADT session.
+#[derive(Clone, Debug, Default)]
+pub struct Unauthenticated;
+
+/// The client has established an authenticated ADT session.
+#[derive(Clone, Debug)]
+pub struct LoggedOn {
+    session_information: Arc<SessionInformation>,
+}
+
+/// The client is logged on and has fetched the server's central capabilities.
 #[derive(Clone, Debug)]
 pub struct Discovered {
+    session_information: Arc<SessionInformation>,
     capabilities: Arc<Capabilities>,
 }
 
-impl private::Sealed for Undiscovered {}
+impl private::Sealed for Unauthenticated {}
+impl private::Sealed for LoggedOn {}
 impl private::Sealed for Discovered {}
-impl ClientState for Undiscovered {}
+impl ClientState for Unauthenticated {}
+impl ClientState for LoggedOn {}
 impl ClientState for Discovered {}
+
+impl LoggedOnState for LoggedOn {
+    fn session_information(&self) -> &SessionInformation {
+        &self.session_information
+    }
+}
+
+impl LoggedOnState for Discovered {
+    fn session_information(&self) -> &SessionInformation {
+        &self.session_information
+    }
+}
 
 /// A client for executing typed ADT operations.
 ///
@@ -49,24 +71,39 @@ impl ClientState for Discovered {}
 /// Because clients may be shared across different contexts, it must be possible
 /// to clone it cheaply.
 #[derive(Clone)]
-pub struct Client<S = Undiscovered> {
+pub struct Client<S = Unauthenticated> {
     transport: Arc<dyn Transport>,
     state: S,
 }
 
-impl Client<Undiscovered> {
-    /// Creates an undiscovered client using the supplied transport.
+impl Client<Unauthenticated> {
+    /// Creates an unauthenticated client using the supplied transport.
     pub fn new(transport: impl Transport + 'static) -> Self {
         Self {
             transport: Arc::new(transport),
-            state: Undiscovered,
+            state: Unauthenticated,
         }
     }
 
+    pub(crate) fn with_session_information(
+        self,
+        session_information: SessionInformation,
+    ) -> Client<LoggedOn> {
+        Client {
+            transport: self.transport,
+            state: LoggedOn {
+                session_information: Arc::new(session_information),
+            },
+        }
+    }
+}
+
+impl Client<LoggedOn> {
     pub(crate) fn with_capabilities(self, capabilities: Capabilities) -> Client<Discovered> {
         Client {
             transport: self.transport,
             state: Discovered {
+                session_information: self.state.session_information,
                 capabilities: Arc::new(capabilities),
             },
         }
@@ -79,11 +116,17 @@ impl Client<Discovered> {
         &self.state.capabilities
     }
 
+    /// Returns the collection advertised for a category identity.
+    pub fn collection(&self, category: CategoryId) -> Option<&Collection> {
+        self.capabilities()
+            .collection(category.scheme, category.term)
+    }
+
     /// Resolves a typed object reference from central discovery.
     ///
-    /// `T` identifies the collection category and interprets that collections
-    /// member convention. Resolving a reference performs does not perform I/O,
-    /// it is simply resolved against the dicovered collections
+    /// `T` identifies the collection category and interprets that collection's
+    /// member convention. Resolving a reference does not perform I/O; it is
+    /// resolved against the discovered collections.
     ///
     /// ```rust,ignore
     /// use goat_adt::ProgramRef;
@@ -101,6 +144,13 @@ impl Client<Discovered> {
 impl<S: ClientState> Client<S> {
     pub(crate) fn transport(&self) -> &dyn Transport {
         self.transport.as_ref()
+    }
+}
+
+impl<S: LoggedOnState> Client<S> {
+    /// Returns information about the authenticated HTTP security session.
+    pub fn session_information(&self) -> &SessionInformation {
+        self.state.session_information()
     }
 
     /// Creates an owned, long-lived SAP user session for stateful operations.

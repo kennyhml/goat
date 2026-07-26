@@ -1,157 +1,184 @@
+use std::collections::HashMap;
+
 use crate::{
+    AdtUri, AdtUriError, CompatibilityError, EntityTag, NegotiableMediaVersion,
     client::{Client, Discovered},
     error::{IncludeError, OperationError, ProgramError, ResponseError},
-    models::{Include, Program, parse_include, parse_program},
-    operation::{Operation, Stateless},
+    models::{
+        IncludeProperties, ProgramProperties, ProgramRunOutput, parse_include_properties,
+        parse_program_properties,
+    },
+    negotiate,
+    operation::{IfNoneMatch, Operation, QueryMode, Stateless, Unconditional},
     protocol::{AdtRequest, AdtResponse},
     resource::{IncludeRef, ObjectVersion, ProgramRef},
-    vocabulary::{INCLUDES, PROGRAMS, query_parameter},
+    vocabulary::{
+        INCLUDES, PROGRAM_RUN, PROGRAM_RUN_RELATION, PROGRAMS, media_type, query_parameter,
+    },
 };
 use derive_builder::Builder;
-use http::{HeaderValue, Method, StatusCode, header};
+use http::{Method, StatusCode, header};
+use stduritemplate::Value;
+use url::Url;
 
-/// A program descriptor tagged with the media-type version returned by SAP.
-///
-/// TODO: Does it make sense to handle NotModified at the same level as versions?..
+const PROGRAM_NAME_VARIABLE: &str = "programname";
+
+/// Program properties tagged with the media-type version returned by SAP.
 #[derive(Clone, Debug)]
-pub enum ProgramResponse {
-    NotModified { etag: Option<String> },
-    V2(Box<Program>),
-    V3(Box<Program>),
+#[non_exhaustive]
+pub enum ProgramPropertiesRepresentation {
+    V2(Box<ProgramProperties>),
+    V3(Box<ProgramProperties>),
 }
 
-impl ProgramResponse {
+impl ProgramPropertiesRepresentation {
     /// Returns the response media-type version.
-    pub fn media_version(&self) -> Option<ProgramMediaVersion> {
+    pub fn media_version(&self) -> ProgramMediaVersion {
         match self {
-            Self::NotModified { .. } => None,
-            Self::V2(_) => Some(ProgramMediaVersion::V2),
-            Self::V3(_) => Some(ProgramMediaVersion::V3),
+            Self::V2(_) => ProgramMediaVersion::V2,
+            Self::V3(_) => ProgramMediaVersion::V3,
         }
     }
 
-    /// Borrows the normalized program descriptor when it was modified.
-    pub fn as_program(&self) -> Option<&Program> {
+    /// Borrows the normalized program properties.
+    pub fn as_properties(&self) -> &ProgramProperties {
         match self {
-            Self::NotModified { .. } => None,
-            Self::V2(program) | Self::V3(program) => Some(program.as_ref()),
+            Self::V2(program) | Self::V3(program) => program.as_ref(),
         }
     }
 
-    /// Consumes the response and returns the descriptor when it was modified.
-    pub fn into_program(self) -> Option<Program> {
+    /// Consumes the representation and returns the descriptor.
+    pub fn into_properties(self) -> ProgramProperties {
         match self {
-            Self::NotModified { .. } => None,
-            Self::V2(program) | Self::V3(program) => Some(*program),
+            Self::V2(program) | Self::V3(program) => *program,
         }
     }
 
     /// Returns the response entity tag, when present.
     pub fn etag(&self) -> Option<&str> {
         match self {
-            Self::NotModified { etag } => etag.as_deref(),
             Self::V2(program) | Self::V3(program) => program.etag.as_deref(),
         }
     }
 }
 
-/// A conditional response containing an ABAP include descriptor.
+/// Include properties tagged with the media-type version returned by SAP.
 #[derive(Clone, Debug)]
-pub enum IncludeResponse {
-    NotModified { etag: Option<String> },
-    V2(Box<Include>),
+#[non_exhaustive]
+pub enum IncludePropertiesRepresentation {
+    V2(Box<IncludeProperties>),
 }
 
-impl IncludeResponse {
+impl IncludePropertiesRepresentation {
     /// Returns the response media-type version.
-    pub fn media_version(&self) -> Option<IncludeMediaVersion> {
+    pub fn media_version(&self) -> IncludeMediaVersion {
         match self {
-            Self::NotModified { .. } => None,
-            Self::V2(_) => Some(IncludeMediaVersion::V2),
+            Self::V2(_) => IncludeMediaVersion::V2,
         }
     }
 
-    /// Borrows the include descriptor when it was modified.
-    pub fn as_include(&self) -> Option<&Include> {
+    /// Borrows the normalized include properties.
+    pub fn as_properties(&self) -> &IncludeProperties {
         match self {
-            Self::NotModified { .. } => None,
-            Self::V2(include) => Some(include.as_ref()),
+            Self::V2(include) => include.as_ref(),
         }
     }
 
-    /// Consumes the response and returns the descriptor when it was modified.
-    pub fn into_include(self) -> Option<Include> {
+    /// Consumes the representation and returns the properties.
+    pub fn into_properties(self) -> IncludeProperties {
         match self {
-            Self::NotModified { .. } => None,
-            Self::V2(include) => Some(*include),
+            Self::V2(include) => *include,
         }
     }
 
     /// Returns the response entity tag, when present.
     pub fn etag(&self) -> Option<&str> {
         match self {
-            Self::NotModified { etag } => etag.as_deref(),
             Self::V2(include) => include.etag.as_deref(),
         }
     }
 }
 
-/// Fetches and normalizes the metadata representation of a program.
-#[derive(Builder, Debug)]
-#[builder(setter(into))]
+/// Fetches the properties of a program.
+///
+/// Programs may have multiple fetchable versions. Specify a version with
+/// the [`ObjectVersion`](crate::ObjectVersion) parameter. When different
+/// media types are available for usage, the latest common representation
+/// will be selected. If this is not possible, an error is returned.
+///
+/// This operation supports E-Tag handling via the [`QueryMode`] response
+/// decorator. The result of the operation changes when an etag is supplied.
+///
+/// Backend handler: `CL_SEDI_ADT_RES_SOURCE`
+#[derive(Debug)]
 #[readonly::make]
-pub struct ProgramQuery {
+pub struct ProgramPropertiesQuery<M = Unconditional> {
     /// The program resource to fetch.
     pub program: ProgramRef,
 
     /// Media-type versions in descending caller preference.
-    #[builder(default = "default_program_media_priority()")]
     pub priority: Vec<ProgramMediaVersion>,
 
-    /// A cached descriptor ETag used for a conditional query.
-    #[builder(setter(strip_option), default)]
-    pub etag: Option<String>,
-
     /// The repository-object version to request.
-    #[builder(setter(strip_option), default)]
     pub version: Option<ObjectVersion>,
+
+    mode: M,
 }
 
-impl Operation<Discovered> for ProgramQuery {
-    type Response = ProgramResponse;
+impl<M> ProgramPropertiesQuery<M> {
+    /// Replaces the media-type preference order.
+    pub fn priority(mut self, priority: impl Into<Vec<ProgramMediaVersion>>) -> Self {
+        self.priority = priority.into();
+        self
+    }
+
+    /// Selects the repository-object version to request.
+    pub fn version(mut self, version: ObjectVersion) -> Self {
+        self.version = Some(version);
+        self
+    }
+}
+
+impl ProgramPropertiesQuery<Unconditional> {
+    /// Makes this query conditional on the supplied properties ETag.
+    pub fn if_none_match(self, etag: EntityTag) -> ProgramPropertiesQuery<IfNoneMatch> {
+        ProgramPropertiesQuery {
+            program: self.program,
+            priority: self.priority,
+            version: self.version,
+            mode: IfNoneMatch { etag },
+        }
+    }
+}
+
+impl<M: QueryMode<ProgramPropertiesRepresentation>> Operation<Discovered>
+    for ProgramPropertiesQuery<M>
+{
+    type Response = M::Response;
     type Kind = Stateless;
 
     fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
-        let representation =
-            preferred_representation(client, &self.priority).map_err(program_operation_error)?;
+        let collection = client
+            .collection(PROGRAMS)
+            .ok_or(CompatibilityError::MissingCollection(PROGRAMS))?;
+
+        let accept = negotiate(&self.priority, collection.accepted_media_types())?;
+
         let mut request = AdtRequest::new(Method::GET, self.program.uri().clone());
         if let Some(version) = self.version {
             request.push_query(query_parameter::VERSION, version.as_str());
         }
-        request.headers_mut().insert(
-            header::ACCEPT,
-            HeaderValue::from_static(representation.media_type()),
-        );
-        if let Some(etag) = &self.etag {
-            request.headers_mut().insert(
-                header::IF_NONE_MATCH,
-                HeaderValue::from_str(etag)
-                    .map_err(ProgramError::InvalidEntityTag)
-                    .map_err(program_operation_error)?,
-            );
-        } else {
-            request
-                .headers_mut()
-                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-        }
+        request.set_accept(accept.media_type());
+        request.set_cache_revalidation(self.mode.if_none_match());
         Ok(request)
     }
 
     fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
         if response.status() == StatusCode::NOT_MODIFIED {
-            return Ok(ProgramResponse::NotModified {
-                etag: response_etag(&response),
-            });
+            return self
+                .mode
+                .not_modified(response_etag(&response))
+                .ok_or(ResponseError::UnexpectedNotModified);
         }
         if response.status() != StatusCode::OK {
             return Err(ResponseError::UnexpectedStatus {
@@ -171,74 +198,164 @@ impl Operation<Discovered> for ProgramQuery {
                     content_type: content_type.to_owned(),
                 }
             })?;
-        let program = parse_program(
+        let properties = parse_program_properties(
             self.program.clone(),
             response.body(),
             response_etag(&response),
         )?;
-        Ok(match representation {
-            ProgramMediaVersion::V2 => ProgramResponse::V2(Box::new(program)),
-            ProgramMediaVersion::V3 => ProgramResponse::V3(Box::new(program)),
-        })
+        let representation = match representation.kind {
+            ProgramRepresentationKind::V2 => {
+                ProgramPropertiesRepresentation::V2(Box::new(properties))
+            }
+            ProgramRepresentationKind::V3 => {
+                ProgramPropertiesRepresentation::V3(Box::new(properties))
+            }
+        };
+        Ok(self.mode.modified(representation))
     }
 }
 
-/// Fetches the metadata representation of a standalone ABAP include.
+/// Runs an executable ABAP program and returns its rendered console output.
+///
+/// This does not currently support IF_OO_ADT_CLASSRUN inside programs. The
+/// only way output is returned is when executing a list report. The backend
+/// resource then exports that list into the plain text of the body.
+///
+/// Even if the user does not have sufficent permissions to execute the
+/// program or the program could not be found, 200 OK is returned.
+///
+/// ADT can not handle program dumps, it simply returns a status code 500.
+///
+/// The profiler id usually seems to be a URL pointing to a freshly created
+/// configuration posted to `runtime/traces/abaptraces/parameters`, there
+/// seems to be a way to have them predefined too. Must be clarified
+///
+/// - Backend handler: `CL_SEDI_ADT_PROGRAMRUN`
 #[derive(Builder, Debug)]
 #[builder(setter(into))]
 #[readonly::make]
-pub struct IncludeQuery {
+pub struct ProgramRun {
+    /// The executable program to run.
+    pub program: ProgramRef,
+
+    /// An optional ABAP profiler trace identifier.
+    #[builder(setter(strip_option), default)]
+    pub profiler_id: Option<String>,
+}
+
+impl Operation<Discovered> for ProgramRun {
+    type Response = ProgramRunOutput;
+    type Kind = Stateless;
+
+    fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
+        let template = program_run_template(client)?;
+        let (target, query) =
+            expand_program_run_target(template, self.program.name(), self.profiler_id.as_deref())
+                .map_err(program_operation_error)?;
+        let mut request = AdtRequest::new(Method::POST, target);
+        for (name, value) in query {
+            request.push_query(name, value);
+        }
+        request.set_accept(media_type::SOURCE);
+        Ok(request)
+    }
+
+    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+        if !response.status().is_success() {
+            return Err(ResponseError::UnexpectedStatus {
+                status: response.status(),
+                body: String::from_utf8_lossy(response.body()).into_owned(),
+            });
+        }
+        let content = String::from_utf8(response.into_body())
+            .map_err(ProgramError::InvalidRunOutputEncoding)?;
+        Ok(ProgramRunOutput::new(self.program.clone(), content))
+    }
+}
+
+/// Fetches the properties of an include.
+///
+/// Includes may have multiple fetchable versions. Specify a version with
+/// the [`ObjectVersion`](crate::ObjectVersion) parameter. When different
+/// media types are available for usage, the latest common representation
+/// will be selected. If this is not possible, an error is returned.
+///
+/// This operation supports E-Tag handling via the [`QueryMode`] response
+/// decorator. The result of the operation changes when an etag is supplied.
+///
+/// The E-Tag of an the include changes when its main program or other
+/// surrounding context changes.
+///
+/// Backend handler: `CL_SEDI_ADT_RES_SOURCE`
+#[derive(Debug)]
+#[readonly::make]
+pub struct IncludePropertiesQuery<M = Unconditional> {
     /// The include resource to fetch.
     pub include: IncludeRef,
 
     /// Media-type versions in descending caller preference.
-    #[builder(default = "default_include_media_priority()")]
     pub priority: Vec<IncludeMediaVersion>,
 
-    /// A cached descriptor ETag used for a conditional query.
-    #[builder(setter(strip_option), default)]
-    pub etag: Option<String>,
-
     /// The repository-object version to request.
-    #[builder(setter(strip_option), default)]
     pub version: Option<ObjectVersion>,
+
+    mode: M,
 }
 
-impl Operation<Discovered> for IncludeQuery {
-    type Response = IncludeResponse;
+impl<M> IncludePropertiesQuery<M> {
+    /// Replaces the media-type preference order.
+    pub fn priority(mut self, priority: impl Into<Vec<IncludeMediaVersion>>) -> Self {
+        self.priority = priority.into();
+        self
+    }
+
+    /// Selects the repository-object version to request.
+    pub fn version(mut self, version: ObjectVersion) -> Self {
+        self.version = Some(version);
+        self
+    }
+}
+
+impl IncludePropertiesQuery<Unconditional> {
+    /// Makes this query conditional on the supplied properties ETag.
+    pub fn if_none_match(self, etag: EntityTag) -> IncludePropertiesQuery<IfNoneMatch> {
+        IncludePropertiesQuery {
+            include: self.include,
+            priority: self.priority,
+            version: self.version,
+            mode: IfNoneMatch { etag },
+        }
+    }
+}
+
+impl<M: QueryMode<IncludePropertiesRepresentation>> Operation<Discovered>
+    for IncludePropertiesQuery<M>
+{
+    type Response = M::Response;
     type Kind = Stateless;
 
     fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
-        let representation = preferred_include_representation(client, &self.priority)
-            .map_err(include_operation_error)?;
+        let collection = client
+            .collection(INCLUDES)
+            .ok_or(CompatibilityError::MissingCollection(INCLUDES))?;
+
+        let accept = negotiate(&self.priority, collection.accepted_media_types())?;
+
         let mut request = AdtRequest::new(Method::GET, self.include.uri().clone());
         if let Some(version) = self.version {
             request.push_query(query_parameter::VERSION, version.as_str());
         }
-        request.headers_mut().insert(
-            header::ACCEPT,
-            HeaderValue::from_static(representation.media_type()),
-        );
-        if let Some(etag) = &self.etag {
-            request.headers_mut().insert(
-                header::IF_NONE_MATCH,
-                HeaderValue::from_str(etag)
-                    .map_err(IncludeError::InvalidEntityTag)
-                    .map_err(include_operation_error)?,
-            );
-        } else {
-            request
-                .headers_mut()
-                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-        }
+        request.set_accept(accept.media_type());
+        request.set_cache_revalidation(self.mode.if_none_match());
         Ok(request)
     }
 
     fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
         if response.status() == StatusCode::NOT_MODIFIED {
-            return Ok(IncludeResponse::NotModified {
-                etag: response_etag(&response),
-            });
+            return self
+                .mode
+                .not_modified(response_etag(&response))
+                .ok_or(ResponseError::UnexpectedNotModified);
         }
         if response.status() != StatusCode::OK {
             return Err(ResponseError::UnexpectedStatus {
@@ -258,83 +375,88 @@ impl Operation<Discovered> for IncludeQuery {
                     content_type: content_type.to_owned(),
                 }
             })?;
-        let include = parse_include(
+        let properties = parse_include_properties(
             self.include.clone(),
             response.body(),
             response_etag(&response),
         )?;
-        Ok(match representation {
-            IncludeMediaVersion::V2 => IncludeResponse::V2(Box::new(include)),
-        })
+        let representation = match representation {
+            IncludeMediaVersion::V2 => IncludePropertiesRepresentation::V2(Box::new(properties)),
+        };
+        Ok(self.mode.modified(representation))
     }
 }
 
 impl ProgramRef {
-    /// Creates a builder for an operation that fetches this programs metadata.
-    ///
-    /// That way, it becomes possible to just call
-    /// ```rust,ignore
-    /// program.query().etag(etag).execute(&client).await?
-    /// ```
-    /// instead of constructing an operation from scratch:
-    /// ```rust,ignore
-    /// ProgramQueryBuilder::default()
-    ///     .program(program)
-    ///     .etag(etag)
-    ///     .execute(&client)
-    ///     .await?
-    /// ```
-    pub fn query(&self) -> ProgramQueryBuilder {
-        let mut builder = ProgramQueryBuilder::default();
+    /// Creates an unconditional operation that fetches this program's metadata.
+    pub fn query(&self) -> ProgramPropertiesQuery {
+        ProgramPropertiesQuery {
+            program: self.clone(),
+            priority: ProgramMediaVersion::SUPPORTED.to_vec(),
+            version: None,
+            mode: Unconditional,
+        }
+    }
+
+    /// Creates a builder for an operation that runs this program.
+    pub fn run(&self) -> ProgramRunBuilder {
+        let mut builder = ProgramRunBuilder::default();
         builder.program(self.clone());
         builder
     }
 }
 
 impl IncludeRef {
-    /// Creates a builder for an operation that fetches this include's metadata.
-    pub fn query(&self) -> IncludeQueryBuilder {
-        let mut builder = IncludeQueryBuilder::default();
-        builder.include(self.clone());
-        builder
+    /// Creates an unconditional operation that fetches this include's metadata.
+    pub fn query(&self) -> IncludePropertiesQuery {
+        IncludePropertiesQuery {
+            include: self.clone(),
+            priority: IncludeMediaVersion::SUPPORTED.to_vec(),
+            version: None,
+            mode: Unconditional,
+        }
     }
 }
 
-/// The SAP media-type version used to decode a program descriptor.
+/// The SAP media-type version used to decode program properties.
 ///
-/// `ProgramQuery` defaults to V3 before V2, and callers can supply a different
-/// preference. Both representations are normalized into [`Program`], because
-/// there seems to be no difference between V2 and V3.
+/// `ProgramPropertiesQuery` defaults to V3 before V2, and callers can supply a
+/// different preference. Both representations are normalized into
+/// [`ProgramProperties`], because there seems to be no difference between V2
+/// and V3.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ProgramMediaVersion {
+pub struct ProgramMediaVersion {
+    media_type: &'static str,
+    kind: ProgramRepresentationKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ProgramRepresentationKind {
     V2,
     V3,
 }
 
 impl ProgramMediaVersion {
-    const V2_MEDIA_TYPE: &'static str = "application/vnd.sap.adt.programs.programs.v2+xml";
-    const V3_MEDIA_TYPE: &'static str = "application/vnd.sap.adt.programs.programs.v3+xml";
+    pub const V2: Self = Self {
+        media_type: "application/vnd.sap.adt.programs.programs.v2+xml",
+        kind: ProgramRepresentationKind::V2,
+    };
+
+    pub const V3: Self = Self {
+        media_type: "application/vnd.sap.adt.programs.programs.v3+xml",
+        kind: ProgramRepresentationKind::V3,
+    };
+}
+
+impl NegotiableMediaVersion for ProgramMediaVersion {
+    const SUPPORTED: &'static [Self] = &[Self::V3, Self::V2];
 
     fn media_type(self) -> &'static str {
-        match self {
-            Self::V2 => Self::V2_MEDIA_TYPE,
-            Self::V3 => Self::V3_MEDIA_TYPE,
-        }
-    }
-
-    fn from_media_type(media_type: &str) -> Option<Self> {
-        let essence = media_type.split(';').next()?.trim();
-        if essence.eq_ignore_ascii_case(Self::V3_MEDIA_TYPE) {
-            Some(Self::V3)
-        } else if essence.eq_ignore_ascii_case(Self::V2_MEDIA_TYPE) {
-            Some(Self::V2)
-        } else {
-            None
-        }
+        self.media_type
     }
 }
 
-/// The SAP media-type version used to decode an include descriptor.
+/// The SAP media-type version used to decode include properties.
 ///
 /// Only V2 is currently advertised by tested systems, but modeling the version
 /// keeps include negotiation aligned with the rest of the programs domain.
@@ -345,132 +467,183 @@ pub enum IncludeMediaVersion {
 
 impl IncludeMediaVersion {
     const V2_MEDIA_TYPE: &'static str = "application/vnd.sap.adt.programs.includes.v2+xml";
+}
+
+impl NegotiableMediaVersion for IncludeMediaVersion {
+    const SUPPORTED: &'static [Self] = &[Self::V2];
 
     fn media_type(self) -> &'static str {
         match self {
             Self::V2 => Self::V2_MEDIA_TYPE,
         }
     }
-
-    fn from_media_type(media_type: &str) -> Option<Self> {
-        let essence = media_type.split(';').next()?.trim();
-        essence
-            .eq_ignore_ascii_case(Self::V2_MEDIA_TYPE)
-            .then_some(Self::V2)
-    }
-}
-
-// TODO: Probably better to handle inside the execution
-fn default_program_media_priority() -> Vec<ProgramMediaVersion> {
-    vec![ProgramMediaVersion::V3, ProgramMediaVersion::V2]
-}
-
-fn default_include_media_priority() -> Vec<IncludeMediaVersion> {
-    vec![IncludeMediaVersion::V2]
 }
 
 // TODO: Move this to common utils or even into AdtResponse
-fn response_etag(response: &AdtResponse) -> Option<String> {
+fn response_etag(response: &AdtResponse) -> Option<EntityTag> {
     response
         .headers()
         .get(header::ETAG)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
+        .and_then(EntityTag::from_header_value)
 }
 
-// TODO: Negotiate woud be the more accurate term and this is a basic
-// operation we should also have some generic helper for, parse both
-// sides into one representation and then have them implement PartialOrd
-// or something
-fn preferred_representation(
-    client: &Client<Discovered>,
-    priority: &[ProgramMediaVersion],
-) -> Result<ProgramMediaVersion, ProgramError> {
+fn program_run_template(client: &Client<Discovered>) -> Result<&str, OperationError> {
     let collection = client
-        .capabilities()
-        .collection(PROGRAMS.scheme, PROGRAMS.term)
-        .ok_or(ProgramError::MissingCollection)?;
-    let accepted = collection.accepted_media_types();
-
-    priority
+        .collection(PROGRAM_RUN)
+        .ok_or(CompatibilityError::MissingCollection(PROGRAM_RUN))?;
+    collection
+        .template_links()
         .iter()
-        .copied()
-        .find(|representation| {
-            accepted.iter().any(|media_type| {
-                media_type.split(';').next().is_some_and(|value| {
-                    value
-                        .trim()
-                        .eq_ignore_ascii_case(representation.media_type())
-                })
-            })
-        })
-        .ok_or_else(|| ProgramError::UnsupportedRepresentation {
-            preferred: priority
-                .iter()
-                .map(|representation| representation.media_type().to_owned())
-                .collect(),
-            accepted: accepted.to_vec(),
-        })
+        .find(|link| link.relation() == PROGRAM_RUN_RELATION)
+        .map(|link| link.template())
+        .ok_or(ProgramError::MissingRunTemplate)
+        .map_err(program_operation_error)
 }
 
-fn preferred_include_representation(
-    client: &Client<Discovered>,
-    priority: &[IncludeMediaVersion],
-) -> Result<IncludeMediaVersion, IncludeError> {
-    let collection = client
-        .capabilities()
-        .collection(INCLUDES.scheme, INCLUDES.term)
-        .ok_or(IncludeError::MissingCollection)?;
-    let accepted = collection.accepted_media_types();
+fn expand_program_run_target(
+    template: &str,
+    program_name: &str,
+    profiler_id: Option<&str>,
+) -> Result<(AdtUri, Vec<(String, String)>), ProgramError> {
+    if !template_has_variable(template, PROGRAM_NAME_VARIABLE) {
+        return Err(ProgramError::InvalidRunTemplate {
+            template: template.to_owned(),
+            reason: format!("missing `{PROGRAM_NAME_VARIABLE}` variable"),
+        });
+    }
+    if profiler_id.is_some() && !template_has_variable(template, query_parameter::PROFILER_ID) {
+        return Err(ProgramError::UnsupportedProfiler);
+    }
 
-    priority
-        .iter()
-        .copied()
-        .find(|representation| {
-            accepted.iter().any(|media_type| {
-                media_type.split(';').next().is_some_and(|value| {
-                    value
-                        .trim()
-                        .eq_ignore_ascii_case(representation.media_type())
-                })
-            })
+    let mut variables = HashMap::from([(
+        PROGRAM_NAME_VARIABLE.to_owned(),
+        Value::String(program_name.to_owned()),
+    )]);
+    if let Some(profiler_id) = profiler_id {
+        variables.insert(
+            query_parameter::PROFILER_ID.to_owned(),
+            Value::String(profiler_id.to_owned()),
+        );
+    }
+    let expanded = stduritemplate::expand(template, &variables).map_err(|error| {
+        ProgramError::InvalidRunTemplate {
+            template: template.to_owned(),
+            reason: error.to_string(),
+        }
+    })?;
+    parse_program_run_target(&expanded).map_err(|source| ProgramError::InvalidRunTarget {
+        target: expanded,
+        source,
+    })
+}
+
+fn template_has_variable(template: &str, expected: &str) -> bool {
+    let mut remaining = template;
+    while let Some(start) = remaining.find('{') {
+        remaining = &remaining[start + 1..];
+        let Some(end) = remaining.find('}') else {
+            return false;
+        };
+        let expression = &remaining[..end];
+        let expression = expression
+            .chars()
+            .next()
+            .filter(|operator| "+#./;?&".contains(*operator))
+            .map_or(expression, |operator| &expression[operator.len_utf8()..]);
+        if expression.split(',').any(|variable| {
+            let variable = variable.strip_suffix('*').unwrap_or(variable);
+            variable.split_once(':').map_or(variable, |(name, _)| name) == expected
+        }) {
+            return true;
+        }
+        remaining = &remaining[end + 1..];
+    }
+    false
+}
+
+fn parse_program_run_target(
+    expanded: &str,
+) -> Result<(AdtUri, Vec<(String, String)>), AdtUriError> {
+    let (path, query) = match Url::parse(expanded) {
+        Ok(url) => {
+            if !matches!(url.scheme(), "http" | "https")
+                || !url.username().is_empty()
+                || url.password().is_some()
+            {
+                return Err(AdtUriError::Absolute);
+            }
+            if url.fragment().is_some() {
+                return Err(AdtUriError::QueryOrFragment);
+            }
+            (url.path().to_owned(), url.query().map(str::to_owned))
+        }
+        Err(url::ParseError::RelativeUrlWithoutBase) => {
+            if expanded.starts_with("//") {
+                return Err(AdtUriError::Absolute);
+            }
+            if expanded.contains('#') {
+                return Err(AdtUriError::QueryOrFragment);
+            }
+            expanded.split_once('?').map_or_else(
+                || (expanded.to_owned(), None),
+                |(path, query)| (path.to_owned(), Some(query.to_owned())),
+            )
+        }
+        Err(error) => return Err(AdtUriError::Url(error)),
+    };
+    let target = AdtUri::parse(&path)?;
+    let query = query
+        .map(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect()
         })
-        .ok_or_else(|| IncludeError::UnsupportedRepresentation {
-            preferred: priority
-                .iter()
-                .map(|representation| representation.media_type().to_owned())
-                .collect(),
-            accepted: accepted.to_vec(),
-        })
+        .unwrap_or_default();
+    Ok((target, query))
 }
 
 fn program_operation_error(error: ProgramError) -> OperationError {
     OperationError::Response(ResponseError::Program(error))
 }
 
-fn include_operation_error(error: IncludeError) -> OperationError {
-    OperationError::Response(ResponseError::Include(error))
-}
-
 #[cfg(test)]
 mod tests {
-    use http::HeaderMap;
+    use async_trait::async_trait;
+    use http::{HeaderMap, HeaderValue};
 
     use super::*;
+    use crate::Conditional;
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
     const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
+    const SESSION_XML: &[u8] = include_bytes!("../../tests/fixtures/http-session-v3.xml");
 
-    fn program_query() -> ProgramQuery {
-        ProgramQueryBuilder::default()
-            .program(ProgramRef::for_test(
-                crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
-            ))
-            .build()
-            .unwrap()
+    struct UnusedTransport;
+
+    #[async_trait]
+    impl crate::Transport for UnusedTransport {
+        async fn send(&self, _request: AdtRequest) -> Result<AdtResponse, crate::TransportError> {
+            unreachable!("request construction tests do not send requests")
+        }
     }
 
-    fn program_response(representation: ProgramMediaVersion) -> AdtResponse {
+    fn discovered_client(xml: &[u8]) -> Client<Discovered> {
+        Client::new(UnusedTransport)
+            .with_session_information(
+                crate::models::parse_session_information(SESSION_XML).unwrap(),
+            )
+            .with_capabilities(crate::models::parse_capabilities(xml).unwrap())
+    }
+
+    fn program_properties_query() -> ProgramPropertiesQuery {
+        ProgramRef::for_test(
+            "Z_TEST",
+            crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
+        )
+        .query()
+    }
+
+    fn program_properties_response(representation: ProgramMediaVersion) -> AdtResponse {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::CONTENT_TYPE,
@@ -481,38 +654,164 @@ mod tests {
         AdtResponse::new(StatusCode::OK, headers, PROGRAM_XML.as_bytes().to_vec())
     }
 
-    fn include_query() -> IncludeQuery {
-        IncludeQueryBuilder::default()
-            .include(IncludeRef::for_test(
-                crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
+    fn include_properties_query() -> IncludePropertiesQuery {
+        IncludeRef::for_test(crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap())
+            .query()
+    }
+
+    fn program_run() -> ProgramRun {
+        ProgramRunBuilder::default()
+            .program(ProgramRef::for_test(
+                "Z_TEST",
+                crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
             ))
             .build()
             .unwrap()
     }
 
     #[test]
-    fn include_query_defaults_to_v2() {
-        assert_eq!(include_query().priority, [IncludeMediaVersion::V2]);
+    fn include_properties_query_defaults_to_v2() {
+        assert_eq!(
+            include_properties_query().priority,
+            [IncludeMediaVersion::V2]
+        );
     }
 
     #[test]
-    fn tags_a_v2_program_response() {
-        let response = program_query()
-            .decode(program_response(ProgramMediaVersion::V2))
+    fn expands_namespaced_program_run_variables() {
+        let (target, query) = expand_program_run_target(
+            "/sap/bc/adt/programs/programrun/{programname}{?profilerId}",
+            "/DMO/PROGRAM",
+            Some("TRACE ID"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            target.as_str(),
+            "/sap/bc/adt/programs/programrun/%2FDMO%2FPROGRAM"
+        );
+        assert_eq!(query, [("profilerId".to_owned(), "TRACE ID".to_owned())]);
+    }
+
+    #[test]
+    fn omits_an_unset_program_run_profiler() {
+        let (_, query) = expand_program_run_target(
+            "/sap/bc/adt/programs/programrun/{programname}{?profilerId}",
+            "Z_TEST",
+            None,
+        )
+        .unwrap();
+
+        assert!(query.is_empty());
+    }
+
+    #[test]
+    fn rejects_profiling_when_the_template_does_not_advertise_it() {
+        let error = expand_program_run_target(
+            "/sap/bc/adt/programs/programrun/{programname}",
+            "Z_TEST",
+            Some("TRACE-ID"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ProgramError::UnsupportedProfiler));
+    }
+
+    #[test]
+    fn rejects_non_utf8_program_run_output() {
+        let response = AdtResponse::new(StatusCode::OK, HeaderMap::new(), vec![0xff]);
+        let error = program_run().decode(response).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ResponseError::Program(ProgramError::InvalidRunOutputEncoding(_))
+        ));
+    }
+
+    #[test]
+    fn program_run_request_requires_the_discovery_collection() {
+        let client = discovered_client(
+            br#"<app:service xmlns:app="http://www.w3.org/2007/app"
+                    xmlns:atom="http://www.w3.org/2005/Atom">
+                    <app:workspace><atom:title>Programs</atom:title></app:workspace>
+                </app:service>"#,
+        );
+        let error = program_run().request(&client).unwrap_err();
+
+        assert!(matches!(
+            error,
+            OperationError::Compatibility(CompatibilityError::MissingCollection(category))
+                if category == PROGRAM_RUN
+        ));
+    }
+
+    #[test]
+    fn program_run_request_requires_the_relation_template() {
+        let client = discovered_client(
+            br#"<app:service xmlns:app="http://www.w3.org/2007/app"
+                    xmlns:atom="http://www.w3.org/2005/Atom">
+                    <app:workspace>
+                        <atom:title>Programs</atom:title>
+                        <app:collection href="/sap/bc/adt/programs/programrun">
+                            <atom:category term="programrun"
+                                scheme="http://www.sap.com/adt/categories/programs" />
+                        </app:collection>
+                    </app:workspace>
+                </app:service>"#,
+        );
+        let error = program_run().request(&client).unwrap_err();
+
+        assert!(matches!(
+            error,
+            OperationError::Response(ResponseError::Program(ProgramError::MissingRunTemplate))
+        ));
+    }
+
+    #[test]
+    fn tags_a_v2_program_properties_representation() {
+        let representation = program_properties_query()
+            .decode(program_properties_response(ProgramMediaVersion::V2))
             .unwrap();
-        assert!(matches!(response, ProgramResponse::V2(_)));
+        assert!(matches!(
+            representation,
+            ProgramPropertiesRepresentation::V2(_)
+        ));
     }
 
     #[test]
-    fn tags_a_v3_program_response() {
-        let response = program_query()
-            .decode(program_response(ProgramMediaVersion::V3))
+    fn tags_a_v3_program_properties_representation() {
+        let representation = program_properties_query()
+            .decode(program_properties_response(ProgramMediaVersion::V3))
             .unwrap();
-        assert!(matches!(response, ProgramResponse::V3(_)));
+        assert!(matches!(
+            representation,
+            ProgramPropertiesRepresentation::V3(_)
+        ));
     }
 
     #[test]
-    fn decodes_a_v2_include_response() {
+    fn wraps_a_modified_conditional_program_properties_query() {
+        let response = program_properties_query()
+            .if_none_match(EntityTag::from_static("old-etag"))
+            .decode(program_properties_response(ProgramMediaVersion::V3))
+            .unwrap();
+
+        assert!(matches!(
+            response,
+            Conditional::Modified(ProgramPropertiesRepresentation::V3(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_not_modified_for_an_unconditional_program_properties_query() {
+        let response = AdtResponse::new(StatusCode::NOT_MODIFIED, HeaderMap::new(), Vec::new());
+        let error = program_properties_query().decode(response).unwrap_err();
+
+        assert!(matches!(error, ResponseError::UnexpectedNotModified));
+    }
+
+    #[test]
+    fn decodes_a_v2_include_properties_representation() {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::CONTENT_TYPE,
@@ -521,9 +820,12 @@ mod tests {
         headers.insert(header::ETAG, HeaderValue::from_static("include-etag"));
         let response = AdtResponse::new(StatusCode::OK, headers, INCLUDE_XML.as_bytes().to_vec());
 
-        let response = include_query().decode(response).unwrap();
-        assert!(matches!(response, IncludeResponse::V2(_)));
-        assert_eq!(response.etag(), Some("include-etag"));
+        let representation = include_properties_query().decode(response).unwrap();
+        assert!(matches!(
+            representation,
+            IncludePropertiesRepresentation::V2(_)
+        ));
+        assert_eq!(representation.etag(), Some("include-etag"));
     }
 
     #[test]
@@ -532,9 +834,20 @@ mod tests {
         headers.insert(header::ETAG, HeaderValue::from_static("include-etag"));
         let response = AdtResponse::new(StatusCode::NOT_MODIFIED, headers, Vec::new());
 
-        let response = include_query().decode(response).unwrap();
-        assert!(matches!(response, IncludeResponse::NotModified { .. }));
-        assert_eq!(response.etag(), Some("include-etag"));
-        assert!(response.as_include().is_none());
+        let response = include_properties_query()
+            .if_none_match(EntityTag::from_static("include-etag"))
+            .decode(response)
+            .unwrap();
+        assert!(matches!(&response, Conditional::NotModified { .. }));
+        assert_eq!(response.not_modified_etag(), Some("include-etag"));
+        assert!(response.as_modified().is_none());
+    }
+
+    #[test]
+    fn rejects_not_modified_for_an_unconditional_include_properties_query() {
+        let response = AdtResponse::new(StatusCode::NOT_MODIFIED, HeaderMap::new(), Vec::new());
+        let error = include_properties_query().decode(response).unwrap_err();
+
+        assert!(matches!(error, ResponseError::UnexpectedNotModified));
     }
 }

@@ -2,24 +2,43 @@
 
 use async_trait::async_trait;
 use goat_adt::{
-    AdtRequest, AdtResponse, Client, CoreDiscoveryQuery, DiscoveryError, DiscoveryQuery, Operation,
-    OperationError, ReqwestTransport, ResponseError, Transport, TransportError,
+    AdtRequest, AdtResponse, CategoryId, Client, CoreDiscoveryQuery, DiscoveryError,
+    DiscoveryQuery, Operation, OperationError, ReqwestTransport, ResponseError, Transport,
+    TransportError,
 };
-use http::{HeaderMap, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode, header};
+use httpmock::Mock;
 use httpmock::prelude::*;
 use std::sync::{Arc, Mutex};
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
 const CORE_DISCOVERY_XML: &str = include_str!("fixtures/core-discovery.xml");
 const INVALID_DISCOVERY_XML: &str = include_str!("fixtures/invalid-discovery.xml");
+const SESSION_XML: &str = include_str!("fixtures/http-session-v3.xml");
+const SESSION_MEDIA_TYPE: &str = "application/vnd.sap.adt.core.http.session.v3+xml";
 const PROGRAMS_SCHEME: &str = "http://www.sap.com/adt/categories/programs";
+const PROGRAMS_CATEGORY: CategoryId = CategoryId {
+    scheme: PROGRAMS_SCHEME,
+    term: "programs",
+};
 const COMPATIBILITY_SCHEME: &str = "http://www.sap.com/adt/categories/compatibility";
 
+async fn mock_logon(server: &MockServer) -> Mock<'_> {
+    server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/core/http/sessions");
+            then.status(200)
+                .header("content-type", SESSION_MEDIA_TYPE)
+                .body(SESSION_XML);
+        })
+        .await
+}
+
 #[tokio::test]
-async fn discovery_is_an_operation_for_an_undiscovered_client() {
+async fn core_discovery_is_an_operation_for_a_logged_on_client() {
     let transport = FixtureTransport::new(CORE_DISCOVERY_XML);
     let requests = Arc::clone(&transport.requests);
-    let client = Client::new(transport);
+    let client = Client::new(transport).logon().await.unwrap();
 
     let capabilities = CoreDiscoveryQuery.execute(&client).await.unwrap();
     let collection = capabilities
@@ -37,22 +56,25 @@ async fn discovery_is_an_operation_for_an_undiscovered_client() {
     );
     assert_eq!(
         requests.lock().unwrap().as_slice(),
-        ["/sap/bc/adt/core/discovery"]
+        [
+            "/sap/bc/adt/core/http/sessions",
+            "/sap/bc/adt/core/discovery"
+        ]
     );
 }
 
 #[tokio::test]
 async fn client_discovery_transitions_and_retains_capabilities() {
     let client = Client::new(FixtureTransport::new(DISCOVERY_XML))
+        .logon()
+        .await
+        .unwrap()
         .discover()
         .await
         .unwrap();
     let cloned_client = client.clone();
 
-    let collection = client
-        .capabilities()
-        .collection(PROGRAMS_SCHEME, "programs")
-        .unwrap();
+    let collection = client.collection(PROGRAMS_CATEGORY).unwrap();
 
     assert_eq!(collection.title(), Some("Programs"));
     assert_eq!(
@@ -72,6 +94,7 @@ async fn client_discovery_transitions_and_retains_capabilities() {
 #[tokio::test]
 async fn reqwest_transport_sends_the_discovery_contract() {
     let server = MockServer::start_async().await;
+    let logon = mock_logon(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET)
@@ -93,8 +116,15 @@ async fn reqwest_transport_sends_the_discovery_contract() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport).discover().await.unwrap();
+    let client = Client::new(transport)
+        .logon()
+        .await
+        .unwrap()
+        .discover()
+        .await
+        .unwrap();
 
+    logon.assert_async().await;
     discovery.assert_async().await;
     assert!(
         client
@@ -107,14 +137,15 @@ async fn reqwest_transport_sends_the_discovery_contract() {
 #[tokio::test]
 async fn reqwest_transport_reuses_security_session_cookies() {
     let server = MockServer::start_async().await;
-    let core_discovery = server
+    let logon = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/core/discovery")
+                .path("/sap/bc/adt/core/http/sessions")
                 .header("cookie", "sap-usercontext=sap-client=001&sap-language=EN");
             then.status(200)
                 .header("set-cookie", "SAP_SESSIONID_A4H_001=session; Path=/")
-                .body(CORE_DISCOVERY_XML);
+                .header("content-type", SESSION_MEDIA_TYPE)
+                .body(SESSION_XML);
         })
         .await;
     let central_discovery_user_context_first = server
@@ -142,12 +173,11 @@ async fn reqwest_transport_reuses_security_session_cookies() {
         .basic_auth("USER", "PASSWORD")
         .build()
         .unwrap();
-    let client = Client::new(transport);
+    let client = Client::new(transport).logon().await.unwrap();
 
-    CoreDiscoveryQuery.execute(&client).await.unwrap();
     client.discover().await.unwrap();
 
-    core_discovery.assert_async().await;
+    logon.assert_async().await;
     assert_eq!(
         central_discovery_user_context_first.hits_async().await
             + central_discovery_session_first.hits_async().await,
@@ -158,6 +188,7 @@ async fn reqwest_transport_reuses_security_session_cookies() {
 #[tokio::test]
 async fn unexpected_status_is_an_operation_response_error() {
     let server = MockServer::start_async().await;
+    let logon = mock_logon(&server).await;
     server
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
@@ -173,7 +204,13 @@ async fn unexpected_status_is_an_operation_response_error() {
         .build()
         .unwrap();
 
-    let error = match Client::new(transport).discover().await {
+    let error = match Client::new(transport)
+        .logon()
+        .await
+        .unwrap()
+        .discover()
+        .await
+    {
         Ok(_) => panic!("discovery unexpectedly succeeded"),
         Err(error) => error,
     };
@@ -185,14 +222,16 @@ async fn unexpected_status_is_an_operation_response_error() {
             ..
         })
     ));
+    logon.assert_async().await;
 }
 
 #[tokio::test]
 async fn discovery_rejects_collection_urls_outside_the_sap_resource_root() {
-    let error = DiscoveryQuery
-        .execute(&Client::new(FixtureTransport::new(INVALID_DISCOVERY_XML)))
+    let client = Client::new(FixtureTransport::new(INVALID_DISCOVERY_XML))
+        .logon()
         .await
-        .unwrap_err();
+        .unwrap();
+    let error = DiscoveryQuery.execute(&client).await.unwrap_err();
 
     assert!(matches!(
         error,
@@ -223,6 +262,18 @@ impl Transport for FixtureTransport {
             .lock()
             .unwrap()
             .push(request.target().as_str().to_owned());
+        if request.target().as_str() == "/sap/bc/adt/core/http/sessions" {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(SESSION_MEDIA_TYPE),
+            );
+            return Ok(AdtResponse::new(
+                StatusCode::OK,
+                headers,
+                SESSION_XML.as_bytes().to_vec(),
+            ));
+        }
         Ok(AdtResponse::new(
             StatusCode::OK,
             HeaderMap::new(),

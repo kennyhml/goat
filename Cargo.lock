@@ -738,6 +738,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde-xml-rs",
+ "std-uritemplate",
  "thiserror 2.0.19",
  "tokio",
  "url",
@@ -1860,6 +1861,12 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "std-uritemplate"
+version = "2.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "607a886de8936a98afad21519a797ec17744317d03674f1f64f8d790ae46d4e5"
 
 [[package]]
 name = "string_cache"

@@ -1,3 +1,7 @@
+/// Constants, types, headers and other vocabulary that does not
+/// quite fit into any concrete components of the project at this time.
+use http::HeaderName;
+
 /// A stable category identity from an ADT discovery document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CategoryId {
@@ -18,6 +22,14 @@ pub(crate) const INCLUDES: CategoryId = CategoryId {
     term: "includes",
 };
 
+pub(crate) const PROGRAM_RUN: CategoryId = CategoryId {
+    scheme: "http://www.sap.com/adt/categories/programs",
+    term: "programrun",
+};
+
+pub(crate) const PROGRAM_RUN_RELATION: &str =
+    "http://www.sap.com/adt/relations/programs/programrun";
+
 /// Relations currently understood in program representations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Relation {
@@ -31,6 +43,11 @@ pub(crate) enum Relation {
     ObjectStates,
     Parser,
 }
+
+pub const SECURITY_SESSION_HEADER: HeaderName = HeaderName::from_static("x-sap-security-session");
+pub const PURPOSE_HEADER: HeaderName = HeaderName::from_static("sap-adt-purpose");
+pub const LOAD_BALANCER_HEADER: HeaderName = HeaderName::from_static("sap-adt-saplb");
+pub const CANCEL_ON_CLOSE_HEADER: HeaderName = HeaderName::from_static("sap-cancel-on-close");
 
 impl Relation {
     pub fn from_uri(uri: &str) -> Option<Self> {
@@ -84,6 +101,7 @@ pub(crate) mod query_parameter {
     pub const ACCESS_MODE: &str = "accessMode";
     pub const ACTION: &str = "_action";
     pub const LOCK_HANDLE: &str = "lockHandle";
+    pub const PROFILER_ID: &str = "profilerId";
     pub const VERSION: &str = "version";
 }
 

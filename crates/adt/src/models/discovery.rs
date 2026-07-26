@@ -329,7 +329,7 @@ fn collection_target(href: &str) -> Result<AdtUri, crate::AdtUriError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vocabulary::PROGRAMS;
+    use crate::vocabulary::{PROGRAM_RUN, PROGRAM_RUN_RELATION, PROGRAMS};
 
     const DISCOVERY_XML: &[u8] = include_bytes!("../../tests/fixtures/discovery.xml");
     const INVALID_DISCOVERY_XML: &[u8] =
@@ -356,6 +356,17 @@ mod tests {
             collection.template_links()[0].relation(),
             "http://www.sap.com/adt/categories/programs/valuehelp/application"
         );
+
+        let run_collection = capabilities
+            .collection(PROGRAM_RUN.scheme, PROGRAM_RUN.term)
+            .unwrap();
+        let run_template = &run_collection.template_links()[0];
+        assert_eq!(run_template.relation(), PROGRAM_RUN_RELATION);
+        assert_eq!(
+            run_template.template(),
+            "/sap/bc/adt/programs/programrun/{programname}{?profilerId}"
+        );
+        assert_eq!(run_template.media_type(), Some("text/plain"));
     }
 
     #[test]

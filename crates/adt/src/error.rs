@@ -1,9 +1,9 @@
 use std::{error::Error as StdError, fmt};
 
-use http::{StatusCode, header::InvalidHeaderValue};
+use http::StatusCode;
 use thiserror::Error;
 
-use crate::AdtUriError;
+use crate::{AdtUriError, CompatibilityError};
 
 #[cfg(feature = "reqwest")]
 #[derive(Debug, Error)]
@@ -43,15 +43,68 @@ pub enum DiscoveryError {
     },
 }
 
+/// An error decoding or validating the HTTP session established during logon.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum LogonError {
+    #[error("invalid HTTP session-information XML: {0}")]
+    InvalidResponse(#[from] serde_xml_rs::Error),
+
+    #[error("HTTP session response did not include a Content-Type header")]
+    MissingContentType,
+
+    #[error("HTTP session response did not include a representation body")]
+    MissingResponseBody,
+
+    #[error("unsupported HTTP session response Content-Type `{content_type}`")]
+    UnsupportedContentType { content_type: String },
+
+    #[error("HTTP session response did not advertise a logoff resource")]
+    MissingLogoffLink,
+
+    #[error("HTTP session response did not advertise a cleanup resource")]
+    MissingCleanupLink,
+
+    #[error("system-information link did not advertise a Content-Type")]
+    MissingSystemInformationContentType,
+
+    #[error("invalid HTTP session link `{href}` for relation `{relation}`")]
+    InvalidLink { relation: String, href: String },
+
+    #[error("HTTP session response advertised inactivityTimeout more than once")]
+    DuplicateInactivityTimeout,
+
+    #[error("invalid HTTP session inactivity timeout `{value}`: {source}")]
+    InvalidInactivityTimeout {
+        value: String,
+        source: std::num::ParseIntError,
+    },
+}
+
 /// An error resolving or decoding a program resource.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ProgramError {
+    #[error(transparent)]
+    Compatibility(#[from] CompatibilityError),
+
     #[error("program name `{name}` is empty or contains invalid whitespace or control characters")]
     InvalidName { name: String },
 
-    #[error("central discovery did not advertise the programs collection")]
-    MissingCollection,
+    #[error("the program-run collection did not advertise its execution template")]
+    MissingRunTemplate,
+
+    #[error("the program-run template does not support profiling")]
+    UnsupportedProfiler,
+
+    #[error("invalid program-run template `{template}`: {reason}")]
+    InvalidRunTemplate { template: String, reason: String },
+
+    #[error("program-run template expanded to invalid target `{target}`: {source}")]
+    InvalidRunTarget { target: String, source: AdtUriError },
+
+    #[error("program-run response was not valid UTF-8: {0}")]
+    InvalidRunOutputEncoding(#[source] std::string::FromUtf8Error),
 
     #[error("could not construct the program resource URI: {0}")]
     InvalidTarget(#[from] AdtUriError),
@@ -68,19 +121,8 @@ pub enum ProgramError {
     #[error("program response did not advertise a plain-text source link")]
     MissingSourceLink,
 
-    #[error("invalid program entity tag: {0}")]
-    InvalidEntityTag(#[source] InvalidHeaderValue),
-
     #[error("unsupported program object version `{version}`")]
     UnsupportedObjectVersion { version: String },
-
-    #[error(
-        "none of the preferred program representations {preferred:?} are advertised by the programs collection: {accepted:?}"
-    )]
-    UnsupportedRepresentation {
-        preferred: Vec<String>,
-        accepted: Vec<String>,
-    },
 
     #[error("program response did not include a Content-Type header")]
     MissingContentType,
@@ -99,11 +141,11 @@ pub enum ProgramError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum IncludeError {
+    #[error(transparent)]
+    Compatibility(#[from] CompatibilityError),
+
     #[error("include name `{name}` is empty or contains invalid whitespace or control characters")]
     InvalidName { name: String },
-
-    #[error("central discovery did not advertise the includes collection")]
-    MissingCollection,
 
     #[error("could not construct the include resource URI: {0}")]
     InvalidTarget(#[from] AdtUriError),
@@ -122,17 +164,6 @@ pub enum IncludeError {
 
     #[error("include response did not advertise a plain-text source link")]
     MissingSourceLink,
-
-    #[error("invalid include entity tag: {0}")]
-    InvalidEntityTag(#[source] InvalidHeaderValue),
-
-    #[error(
-        "none of the preferred include representations {preferred:?} are advertised by the includes collection: {accepted:?}"
-    )]
-    UnsupportedRepresentation {
-        preferred: Vec<String>,
-        accepted: Vec<String>,
-    },
 
     #[error("include response did not include a Content-Type header")]
     MissingContentType,
@@ -173,8 +204,14 @@ pub enum ResponseError {
     #[error("ADT returned unexpected HTTP status {status}: {body}")]
     UnexpectedStatus { status: StatusCode, body: String },
 
+    #[error("ADT returned 304 Not Modified without an If-None-Match validator")]
+    UnexpectedNotModified,
+
     #[error(transparent)]
     Discovery(#[from] DiscoveryError),
+
+    #[error(transparent)]
+    Logon(#[from] LogonError),
 
     #[error(transparent)]
     Object(#[from] ObjectError),
@@ -189,6 +226,9 @@ pub enum ResponseError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OperationError {
+    #[error(transparent)]
+    Compatibility(#[from] CompatibilityError),
+
     #[error(transparent)]
     Transport(#[from] TransportError),
 

@@ -2,6 +2,7 @@
 
 mod api;
 mod client;
+mod compatibility;
 mod error;
 mod models;
 mod operation;
@@ -18,23 +19,29 @@ pub use api::object::{
     ObjectSourceUpdateBuilderError, ObjectUnlock,
 };
 pub use api::programs::{
-    IncludeMediaVersion, IncludeQuery, IncludeQueryBuilder, IncludeQueryBuilderError,
-    IncludeResponse, ProgramMediaVersion, ProgramQuery, ProgramQueryBuilder,
-    ProgramQueryBuilderError, ProgramResponse,
+    IncludeMediaVersion, IncludePropertiesQuery, IncludePropertiesRepresentation,
+    ProgramMediaVersion, ProgramPropertiesQuery, ProgramPropertiesRepresentation, ProgramRun,
+    ProgramRunBuilder, ProgramRunBuilderError,
 };
-pub use client::{Client, ClientState, Discovered, Undiscovered};
+pub use api::session::{Logon, SessionMediaVersion};
+pub use client::{Client, ClientState, Discovered, LoggedOn, LoggedOnState, Unauthenticated};
+pub use compatibility::{CompatibilityError, NegotiableMediaVersion, negotiate};
 #[cfg(feature = "reqwest")]
 pub use error::ReqwestTransportBuildError;
 pub use error::{
-    DiscoveryError, IncludeError, ObjectError, OperationError, ProgramError, ResponseError,
-    TransportError,
+    DiscoveryError, IncludeError, LogonError, ObjectError, OperationError, ProgramError,
+    ResponseError, TransportError,
 };
 pub use models::{
-    AccessMode, Capabilities, Category, Collection, Include, LockHandle, Program, SourceCode,
-    SyntaxConfiguration, SyntaxLanguage, TemplateLink, Workspace,
+    AccessMode, Capabilities, Category, Collection, IncludeProperties, LockHandle,
+    ProgramProperties, ProgramRunOutput, SessionInformation, SessionUri, SourceCode,
+    SyntaxConfiguration, SyntaxLanguage, SystemInformationLink, TemplateLink, Workspace,
 };
-pub use operation::{Executor, Operation, OperationKind, Stateful, Stateless, UserSession};
-pub use protocol::{AdtRequest, AdtResponse};
+pub use operation::{
+    Conditional, Executor, IfNoneMatch, Operation, OperationKind, QueryMode, Stateful, Stateless,
+    Unconditional, UserSession,
+};
+pub use protocol::{AdtRequest, AdtResponse, EntityTag};
 pub use resource::{
     AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, FromDiscovery, HtmlSourceRef,
     IncludeRef, ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef,

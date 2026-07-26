@@ -1,8 +1,8 @@
-use http::{HeaderValue, Method, StatusCode, header};
+use http::{Method, StatusCode};
 
 use crate::{
-    AdtRequest, AdtResponse, AdtUri, Capabilities, Client, ClientState, Discovered, Operation,
-    OperationError, ResponseError, Stateless, Undiscovered, models::parse_capabilities,
+    AdtRequest, AdtResponse, AdtUri, Capabilities, Client, Discovered, LoggedOn, LoggedOnState,
+    Operation, OperationError, ResponseError, Stateless, models::parse_capabilities,
     vocabulary::media_type,
 };
 
@@ -14,7 +14,7 @@ use crate::{
 /// and collections used by most ADT operations.
 ///
 /// The endpoint is known in advance, so this operation can execute with any
-/// [`ClientState`]. Executing it returns [`Capabilities`] but does not perform
+/// [`LoggedOnState`]. Executing it returns [`Capabilities`] but does not perform
 /// the [`Client::discover`] typestate transition.
 ///
 /// # Observed server handlers
@@ -26,7 +26,7 @@ use crate::{
 #[derive(Debug, Default)]
 pub struct CoreDiscoveryQuery;
 
-impl<S: ClientState> Operation<S> for CoreDiscoveryQuery {
+impl<S: LoggedOnState> Operation<S> for CoreDiscoveryQuery {
     type Response = Capabilities;
     type Kind = Stateless;
 
@@ -34,10 +34,7 @@ impl<S: ClientState> Operation<S> for CoreDiscoveryQuery {
         let target = AdtUri::parse("/sap/bc/adt/core/discovery")
             .expect("the core discovery target is a valid static ADT URI");
         let mut request = AdtRequest::new(Method::GET, target);
-        request.headers_mut().insert(
-            header::ACCEPT,
-            HeaderValue::from_static(media_type::DISCOVERY),
-        );
+        request.set_accept(media_type::DISCOVERY);
         Ok(request)
     }
 
@@ -54,7 +51,7 @@ impl<S: ClientState> Operation<S> for CoreDiscoveryQuery {
 /// types, and URI template links.
 ///
 /// The endpoint is known in advance, so this operation can execute with any
-/// [`ClientState`]. [`Client::discover`] executes it and stores the resulting
+/// [`LoggedOnState`]. [`Client::discover`] executes it and stores the resulting
 /// [`Capabilities`] while transitioning to [`Discovered`].
 ///
 /// # Observed server handlers
@@ -66,7 +63,7 @@ impl<S: ClientState> Operation<S> for CoreDiscoveryQuery {
 #[derive(Debug, Default)]
 pub struct DiscoveryQuery;
 
-impl<S: ClientState> Operation<S> for DiscoveryQuery {
+impl<S: LoggedOnState> Operation<S> for DiscoveryQuery {
     type Response = Capabilities;
     type Kind = Stateless;
 
@@ -74,10 +71,7 @@ impl<S: ClientState> Operation<S> for DiscoveryQuery {
         let target = AdtUri::parse("/sap/bc/adt/discovery")
             .expect("the central discovery target is a valid static ADT URI");
         let mut request = AdtRequest::new(Method::GET, target);
-        request.headers_mut().insert(
-            header::ACCEPT,
-            HeaderValue::from_static(media_type::DISCOVERY),
-        );
+        request.set_accept(media_type::DISCOVERY);
         Ok(request)
     }
 
@@ -86,7 +80,7 @@ impl<S: ClientState> Operation<S> for DiscoveryQuery {
     }
 }
 
-impl Client<Undiscovered> {
+impl Client<LoggedOn> {
     /// Fetches central ADT discovery and returns a client carrying its capabilities.
     pub async fn discover(self) -> Result<Client<Discovered>, OperationError> {
         let capabilities = DiscoveryQuery.execute(&self).await?;
@@ -94,6 +88,7 @@ impl Client<Undiscovered> {
     }
 }
 
+// Both dicovery endpoints use the same format
 fn decode_discovery_response(response: AdtResponse) -> Result<Capabilities, ResponseError> {
     if response.status() != StatusCode::OK {
         return Err(ResponseError::UnexpectedStatus {

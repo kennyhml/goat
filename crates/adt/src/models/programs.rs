@@ -1,35 +1,58 @@
 use serde::Deserialize;
 
 use crate::{
-    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, HtmlSourceRef, IncludeError,
-    IncludeRef, ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef,
-    ParserRef, ProgramError, ProgramRef, SourceRef, SourceVersionsRef, TextElementsRef,
+    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, EntityTag, HtmlSourceRef,
+    IncludeError, IncludeRef, ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion,
+    PackageRef, ParserRef, ProgramError, ProgramRef, SourceRef, SourceVersionsRef, TextElementsRef,
     resource::{AdtLinkMetadata, resolve_href},
     vocabulary::{Relation, media_type},
 };
 
-pub(crate) fn parse_program(
+pub(crate) fn parse_program_properties(
     reference: ProgramRef,
     body: &[u8],
-    etag: Option<String>,
-) -> Result<Program, ProgramError> {
-    let raw: RawProgram = serde_xml_rs::from_reader(body).map_err(ProgramError::InvalidResponse)?;
-    Program::from_raw(reference, raw, etag)
+    etag: Option<EntityTag>,
+) -> Result<ProgramProperties, ProgramError> {
+    let raw: RawProgramProperties =
+        serde_xml_rs::from_reader(body).map_err(ProgramError::InvalidResponse)?;
+    ProgramProperties::from_raw(reference, raw, etag)
 }
 
-pub(crate) fn parse_include(
+pub(crate) fn parse_include_properties(
     reference: IncludeRef,
     body: &[u8],
-    etag: Option<String>,
-) -> Result<Include, IncludeError> {
-    let raw: RawInclude = serde_xml_rs::from_reader(body).map_err(IncludeError::InvalidResponse)?;
-    Include::from_raw(reference, raw, etag)
+    etag: Option<EntityTag>,
+) -> Result<IncludeProperties, IncludeError> {
+    let raw: RawIncludeProperties =
+        serde_xml_rs::from_reader(body).map_err(IncludeError::InvalidResponse)?;
+    IncludeProperties::from_raw(reference, raw, etag)
 }
 
-/// A fetched ABAP program descriptor normalized from V2 or V3 XML.
+/// The plain-text console output produced by running an ABAP program.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[readonly::make]
+pub struct ProgramRunOutput {
+    /// The program that was executed.
+    pub reference: ProgramRef,
+
+    /// The rendered program output returned by SAP.
+    pub content: String,
+}
+
+impl ProgramRunOutput {
+    pub(crate) fn new(reference: ProgramRef, content: String) -> Self {
+        Self { reference, content }
+    }
+}
+
+/// Fetched ABAP program properties normalized from V2 or V3 XML.
+/// TODO: Lazily resolve the associations instead? Saves us doing a
+/// bunch of potentially not needed work ahead of time, but also
+/// means we dont define a clear contract for the user in terms of
+/// what the model may reference.
 #[derive(Clone, Debug)]
 #[readonly::make]
-pub struct Program {
+pub struct ProgramProperties {
     /// The program resource that was fetched.
     pub reference: ProgramRef,
 
@@ -120,15 +143,15 @@ pub struct Program {
     /// All top-level links advertised by the program representation.
     pub links: Vec<AdtLink>,
 
-    /// The entity tag of this program descriptor, when present.
-    pub etag: Option<String>,
+    /// The entity tag of these program properties, when present.
+    pub etag: Option<EntityTag>,
 }
 
-impl Program {
+impl ProgramProperties {
     fn from_raw(
         reference: ProgramRef,
-        raw: RawProgram,
-        etag: Option<String>,
+        raw: RawProgramProperties,
+        etag: Option<EntityTag>,
     ) -> Result<Self, ProgramError> {
         let package_object = ObjectRef::parse(&raw.package.uri).map_err(|source| {
             ProgramError::InvalidPackageUri {
@@ -220,10 +243,10 @@ impl Program {
     }
 }
 
-/// A fetched standalone ABAP include descriptor.
+/// Fetched standalone ABAP include properties.
 #[derive(Clone, Debug)]
 #[readonly::make]
-pub struct Include {
+pub struct IncludeProperties {
     /// The include resource that was fetched.
     pub reference: IncludeRef,
 
@@ -302,15 +325,15 @@ pub struct Include {
     /// All links advertised by the include representation.
     pub links: Vec<AdtLink>,
 
-    /// The entity tag of this include descriptor, when present.
-    pub etag: Option<String>,
+    /// The entity tag of these include properties, when present.
+    pub etag: Option<EntityTag>,
 }
 
-impl Include {
+impl IncludeProperties {
     fn from_raw(
         reference: IncludeRef,
-        raw: RawInclude,
-        etag: Option<String>,
+        raw: RawIncludeProperties,
+        etag: Option<EntityTag>,
     ) -> Result<Self, IncludeError> {
         let package_object = ObjectRef::parse(&raw.package.uri).map_err(|source| {
             IncludeError::InvalidPackageUri {
@@ -522,7 +545,7 @@ fn resolve_include_links(
 
 #[derive(Deserialize)]
 #[serde(rename = "program:abapProgram")]
-struct RawProgram {
+struct RawProgramProperties {
     #[serde(rename = "@adtcore:name")]
     name: String,
     #[serde(rename = "@adtcore:type")]
@@ -569,7 +592,7 @@ struct RawProgram {
 
 #[derive(Deserialize)]
 #[serde(rename = "include:abapInclude")]
-struct RawInclude {
+struct RawIncludeProperties {
     #[serde(rename = "@adtcore:name")]
     name: String,
     #[serde(rename = "@adtcore:type")]
@@ -667,17 +690,18 @@ mod tests {
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
     const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
 
-    fn parse(body: &str) -> Result<Program, ProgramError> {
-        parse_program(
+    fn parse(body: &str) -> Result<ProgramProperties, ProgramError> {
+        parse_program_properties(
             ProgramRef::for_test(
+                "Z_TEST",
                 crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
             ),
             body.as_bytes(),
-            Some("program-etag".to_owned()),
+            Some(EntityTag::from_static("program-etag")),
         )
     }
 
-    fn assert_program(program: &Program) {
+    fn assert_program(program: &ProgramProperties) {
         assert_eq!(program.name, "Z_TEST");
         assert_eq!(program.version, ObjectVersion::Inactive);
         assert_eq!(program.etag.as_deref(), Some("program-etag"));
@@ -702,14 +726,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_include_response() {
+    fn parses_include_properties() {
         let reference = IncludeRef::for_test(
             crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
         );
-        let include = parse_include(
+        let include = parse_include_properties(
             reference.clone(),
             INCLUDE_XML.as_bytes(),
-            Some("include-etag".to_owned()),
+            Some(EntityTag::from_static("include-etag")),
         )
         .unwrap();
 
@@ -730,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_program_response() {
+    fn parses_program_properties() {
         assert_program(&parse(PROGRAM_XML).unwrap());
     }
 

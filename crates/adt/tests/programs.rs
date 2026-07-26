@@ -1,9 +1,10 @@
 #![cfg(feature = "reqwest")]
 
 use goat_adt::{
-    AccessMode, Client, IncludeMediaVersion, IncludeRef, ObjectVersion, Operation,
-    ProgramMediaVersion, ProgramRef, ProgramResponse, ReqwestTransport,
+    AccessMode, Client, Conditional, EntityTag, IncludeMediaVersion, IncludeRef, ObjectVersion,
+    Operation, ProgramMediaVersion, ProgramRef, ReqwestTransport,
 };
+use httpmock::Mock;
 use httpmock::prelude::*;
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
@@ -11,11 +12,92 @@ const LOCK_XML: &str = include_str!("fixtures/object-lock.xml");
 // Captured from live A4H. Its V2 and V3 response bodies were byte-identical.
 const PROGRAM_XML: &str = include_str!("fixtures/program-z-test.xml");
 const INCLUDE_XML: &str = include_str!("fixtures/include-ztest.xml");
+const SESSION_XML: &str = include_str!("fixtures/http-session-v3.xml");
+const SESSION_MEDIA_TYPE: &str = "application/vnd.sap.adt.core.http.session.v3+xml";
 const SOURCE: &str = "REPORT z_goat_test.\nWRITE / 'updated'.\n";
+const RUN_OUTPUT: &str = "Hello from Z_TEST\n";
+
+async fn mock_logon(server: &MockServer) -> Mock<'_> {
+    server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/core/http/sessions");
+            then.status(200)
+                .header("content-type", SESSION_MEDIA_TYPE)
+                .body(SESSION_XML);
+        })
+        .await
+}
 
 #[tokio::test]
-async fn include_query_converts_the_live_ztest_descriptor() {
+async fn program_run_uses_the_discovered_profiled_template() {
     let server = MockServer::start_async().await;
+    let logon = mock_logon(&server).await;
+    let discovery = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/discovery");
+            then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let csrf = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/core/discovery")
+                .header("x-csrf-token", "Fetch")
+                .header("x-sap-adt-sessiontype", "stateless");
+            then.status(200).header("x-csrf-token", "CSRF-TOKEN-RUN");
+        })
+        .await;
+    let run = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/sap/bc/adt/programs/programrun/Z_TEST")
+                .query_param("profilerId", "TRACE ID")
+                .header("accept", "text/plain")
+                .header("x-csrf-token", "CSRF-TOKEN-RUN")
+                .body("");
+            then.status(200)
+                .header("content-type", "text/plain; charset=utf-8")
+                .body(RUN_OUTPUT);
+        })
+        .await;
+    let transport = ReqwestTransport::builder()
+        .destination(server.base_url())
+        .sap_client("001")
+        .language("EN")
+        .basic_auth("USER", "PASSWORD")
+        .build()
+        .unwrap();
+
+    let client = Client::new(transport)
+        .logon()
+        .await
+        .unwrap()
+        .discover()
+        .await
+        .unwrap();
+    let program = client.object::<ProgramRef>("z_test").unwrap();
+    let output = program
+        .run()
+        .profiler_id("TRACE ID")
+        .build()
+        .unwrap()
+        .execute(&client)
+        .await
+        .unwrap();
+
+    assert_eq!(program.name(), "Z_TEST");
+    assert_eq!(output.reference, program);
+    assert_eq!(output.content, RUN_OUTPUT);
+    logon.assert_async().await;
+    discovery.assert_async().await;
+    csrf.assert_async().await;
+    run.assert_async().await;
+}
+
+#[tokio::test]
+async fn include_properties_query_converts_the_live_ztest_properties() {
+    let server = MockServer::start_async().await;
+    let logon = mock_logon(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
@@ -54,19 +136,23 @@ async fn include_query_converts_the_live_ztest_descriptor() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport).discover().await.unwrap();
+    let client = Client::new(transport)
+        .logon()
+        .await
+        .unwrap()
+        .discover()
+        .await
+        .unwrap();
     let reference = client.object::<IncludeRef>("ZTEST").unwrap();
     let response = reference
         .query()
         .priority([IncludeMediaVersion::V2])
         .version(ObjectVersion::Active)
-        .build()
-        .unwrap()
         .execute(&client)
         .await
         .unwrap();
-    assert_eq!(response.media_version(), Some(IncludeMediaVersion::V2));
-    let include = response.into_include().unwrap();
+    assert_eq!(response.media_version(), IncludeMediaVersion::V2);
+    let include = response.into_properties();
     let source = include.source.query().execute(&client).await.unwrap();
 
     assert_eq!(include.reference, reference);
@@ -79,14 +165,16 @@ async fn include_query_converts_the_live_ztest_descriptor() {
     assert_eq!(include.etag.as_deref(), Some("2026012416174900180"));
     assert_eq!(source.content, SOURCE);
 
+    logon.assert_async().await;
     discovery.assert_async().await;
     metadata.assert_async().await;
     get_source.assert_async().await;
 }
 
 #[tokio::test]
-async fn program_query_converts_the_live_z_test_v3_descriptor() {
+async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     let server = MockServer::start_async().await;
+    let logon = mock_logon(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET)
@@ -126,17 +214,17 @@ async fn program_query_converts_the_live_z_test_v3_descriptor() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport).discover().await.unwrap();
-    let reference = client.object::<ProgramRef>("Z_TEST").unwrap();
-    let response = reference
-        .query()
-        .build()
+    let client = Client::new(transport)
+        .logon()
+        .await
         .unwrap()
-        .execute(&client)
+        .discover()
         .await
         .unwrap();
-    assert_eq!(response.media_version(), Some(ProgramMediaVersion::V3));
-    let program = response.into_program().unwrap();
+    let reference = client.object::<ProgramRef>("Z_TEST").unwrap();
+    let response = reference.query().execute(&client).await.unwrap();
+    assert_eq!(response.media_version(), ProgramMediaVersion::V3);
+    let program = response.into_properties();
     let source = program.source.query().execute(&client).await.unwrap();
 
     assert_eq!(program.reference, reference);
@@ -241,14 +329,16 @@ async fn program_query_converts_the_live_z_test_v3_descriptor() {
     );
     assert_eq!(source.content, SOURCE);
 
+    logon.assert_async().await;
     discovery.assert_async().await;
     metadata.assert_async().await;
     get_source.assert_async().await;
 }
 
 #[tokio::test]
-async fn program_query_honors_v2_first_priority() {
+async fn program_properties_query_honors_v2_first_priority() {
     let server = MockServer::start_async().await;
+    let logon = mock_logon(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
@@ -278,31 +368,37 @@ async fn program_query_honors_v2_first_priority() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport).discover().await.unwrap();
+    let client = Client::new(transport)
+        .logon()
+        .await
+        .unwrap()
+        .discover()
+        .await
+        .unwrap();
     let response = client
         .object::<ProgramRef>("Z_TEST")
         .unwrap()
         .query()
         .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
         .version(ObjectVersion::WorkingArea)
-        .build()
-        .unwrap()
         .execute(&client)
         .await
         .unwrap();
-    assert_eq!(response.media_version(), Some(ProgramMediaVersion::V2));
-    let program = response.into_program().unwrap();
+    assert_eq!(response.media_version(), ProgramMediaVersion::V2);
+    let program = response.into_properties();
 
     assert_eq!(program.name, "Z_TEST");
     assert_eq!(program.version, ObjectVersion::Inactive);
     assert_eq!(program.source.etag.as_deref(), Some("202607251959580001"));
+    logon.assert_async().await;
     discovery.assert_async().await;
     metadata.assert_async().await;
 }
 
 #[tokio::test]
-async fn program_query_returns_not_modified_for_a_current_etag() {
+async fn program_properties_query_returns_not_modified_for_a_current_etag() {
     let server = MockServer::start_async().await;
+    let logon = mock_logon(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
@@ -327,28 +423,32 @@ async fn program_query_returns_not_modified_for_a_current_etag() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport).discover().await.unwrap();
+    let client = Client::new(transport)
+        .logon()
+        .await
+        .unwrap()
+        .discover()
+        .await
+        .unwrap();
     let response = client
         .object::<ProgramRef>("Z_TEST")
         .unwrap()
         .query()
-        .etag("202607251959580008")
+        .if_none_match(EntityTag::from_static("202607251959580008"))
         .version(ObjectVersion::Inactive)
-        .build()
-        .unwrap()
         .execute(&client)
         .await
         .unwrap();
 
     assert!(matches!(
-        response,
-        ProgramResponse::NotModified {
-            etag: Some(ref etag)
+        &response,
+        Conditional::NotModified {
+            etag: Some(etag)
         } if etag == "202607251959580008"
     ));
-    assert_eq!(response.media_version(), None);
-    assert_eq!(response.etag(), Some("202607251959580008"));
-    assert!(response.as_program().is_none());
+    assert_eq!(response.not_modified_etag(), Some("202607251959580008"));
+    assert!(response.as_modified().is_none());
+    logon.assert_async().await;
     discovery.assert_async().await;
     metadata.assert_async().await;
 }
@@ -356,6 +456,7 @@ async fn program_query_returns_not_modified_for_a_current_etag() {
 #[tokio::test]
 async fn program_lock_and_update_share_one_user_session() {
     let server = MockServer::start_async().await;
+    let logon = mock_logon(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET)
@@ -456,7 +557,13 @@ async fn program_lock_and_update_share_one_user_session() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport).discover().await.unwrap();
+    let client = Client::new(transport)
+        .logon()
+        .await
+        .unwrap()
+        .discover()
+        .await
+        .unwrap();
     let program = client.object::<ProgramRef>("Z_GOAT_TEST").unwrap();
     let source = program.source().query().execute(&client).await.unwrap();
     let session = client.create_user_session();
@@ -487,6 +594,7 @@ async fn program_lock_and_update_share_one_user_session() {
     session.close().await.unwrap();
 
     assert_eq!(source.etag.as_deref(), Some("SOURCE-ETAG-1"));
+    logon.assert_async().await;
     discovery.assert_async().await;
     csrf.assert_async().await;
     get_source.assert_async().await;

@@ -24,5 +24,17 @@
                     template="/sap/bc/adt/programs/programs/{programname}/valuehelp/application" />
             </adtcomp:templateLinks>
         </app:collection>
+        <app:collection href="/sap/bc/adt/programs/programrun">
+            <atom:title>Run Program</atom:title>
+            <atom:category
+                term="programrun"
+                scheme="http://www.sap.com/adt/categories/programs" />
+            <adtcomp:templateLinks xmlns:adtcomp="http://www.sap.com/adt/compatibility">
+                <adtcomp:templateLink
+                    rel="http://www.sap.com/adt/relations/programs/programrun"
+                    template="/sap/bc/adt/programs/programrun/{programname}{?profilerId}"
+                    type="text/plain" />
+            </adtcomp:templateLinks>
+        </app:collection>
     </app:workspace>
 </app:service>

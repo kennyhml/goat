@@ -1,12 +1,12 @@
 use derive_builder::Builder;
-use http::{HeaderValue, Method, StatusCode, header};
+use http::{Method, StatusCode, header};
 
 use crate::{
-    client::{Client, ClientState},
+    client::{Client, LoggedOnState},
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
     operation::{Operation, Stateful, Stateless},
-    protocol::{AdtRequest, AdtResponse},
+    protocol::{AdtRequest, AdtResponse, EntityTag},
     resource::{IncludeRef, ObjectRef, ProgramRef, SourceRef},
     vocabulary::{PostAction, media_type, query_parameter},
 };
@@ -19,7 +19,7 @@ pub struct ObjectSourceQuery {
     pub source: SourceRef,
 }
 
-impl<S: ClientState> Operation<S> for ObjectSourceQuery {
+impl<S: LoggedOnState> Operation<S> for ObjectSourceQuery {
     type Response = SourceCode;
     type Kind = Stateless;
 
@@ -28,9 +28,7 @@ impl<S: ClientState> Operation<S> for ObjectSourceQuery {
         for (name, value) in &self.source.query {
             request.push_query(name, value);
         }
-        request
-            .headers_mut()
-            .insert(header::ACCEPT, HeaderValue::from_static(media_type::SOURCE));
+        request.set_accept(media_type::SOURCE);
         Ok(request)
     }
 
@@ -39,8 +37,7 @@ impl<S: ClientState> Operation<S> for ObjectSourceQuery {
         let etag = response
             .headers()
             .get(header::ETAG)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
+            .and_then(EntityTag::from_header_value);
         let content =
             String::from_utf8(response.into_body()).map_err(ObjectError::InvalidSourceEncoding)?;
         Ok(SourceCode::new(self.source.clone(), content, etag))
@@ -73,7 +70,7 @@ pub struct ObjectLock {
     pub access_mode: AccessMode,
 }
 
-impl<S: ClientState> Operation<S> for ObjectLock {
+impl<S: LoggedOnState> Operation<S> for ObjectLock {
     type Response = LockHandle;
     type Kind = Stateful;
 
@@ -81,10 +78,7 @@ impl<S: ClientState> Operation<S> for ObjectLock {
         let mut request = AdtRequest::new(Method::POST, self.object.uri().clone());
         request.push_query(query_parameter::ACTION, PostAction::Lock.as_str());
         request.push_query(query_parameter::ACCESS_MODE, self.access_mode.as_str());
-        request.headers_mut().insert(
-            header::ACCEPT,
-            HeaderValue::from_static(media_type::LOCK_RESULT),
-        );
+        request.set_accept(media_type::LOCK_RESULT);
         Ok(request)
     }
 
@@ -104,7 +98,7 @@ pub struct ObjectUnlock {
     pub lock_handle: LockHandle,
 }
 
-impl<S: ClientState> Operation<S> for ObjectUnlock {
+impl<S: LoggedOnState> Operation<S> for ObjectUnlock {
     type Response = ();
     type Kind = Stateful;
 
@@ -153,7 +147,7 @@ impl ObjectSourceUpdateBuilder {
     }
 }
 
-impl<S: ClientState> Operation<S> for ObjectSourceUpdate {
+impl<S: LoggedOnState> Operation<S> for ObjectSourceUpdate {
     type Response = ();
     type Kind = Stateful;
 
@@ -163,10 +157,7 @@ impl<S: ClientState> Operation<S> for ObjectSourceUpdate {
             request.push_query(name, value);
         }
         request.push_query(query_parameter::LOCK_HANDLE, &self.lock_handle.handle);
-        request.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(media_type::SOURCE_UPDATE),
-        );
+        request.set_content_type(media_type::SOURCE_UPDATE);
         request.set_body(self.content.clone());
         Ok(request)
     }
@@ -260,21 +251,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn object_operations_do_not_require_discovery() {
-        fn accepts_undiscovered<O: Operation<crate::Undiscovered>>() {}
+    fn object_operations_require_logon_but_not_discovery() {
+        fn accepts_logged_on<O: Operation<crate::LoggedOn>>() {}
 
-        accepts_undiscovered::<ObjectSourceQuery>();
-        accepts_undiscovered::<ObjectLock>();
-        accepts_undiscovered::<ObjectUnlock>();
-        accepts_undiscovered::<ObjectSourceUpdate>();
+        accepts_logged_on::<ObjectSourceQuery>();
+        accepts_logged_on::<ObjectLock>();
+        accepts_logged_on::<ObjectUnlock>();
+        accepts_logged_on::<ObjectSourceUpdate>();
     }
 
     #[test]
     fn update_builder_rejects_a_lock_for_another_object() {
         let first = ProgramRef::for_test(
+            "ZFIRST",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZFIRST").unwrap(),
         );
         let second = ProgramRef::for_test(
+            "ZSECOND",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap(),
         );
         let lock_handle = LockHandle::new(first.object().clone(), "LOCK-HANDLE".to_owned());
@@ -293,9 +286,11 @@ mod tests {
     #[test]
     fn object_rejects_another_objects_lock_for_unlock() {
         let first = ProgramRef::for_test(
+            "ZFIRST",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZFIRST").unwrap(),
         );
         let second = ProgramRef::for_test(
+            "ZSECOND",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap(),
         );
         let lock_handle = LockHandle::new(first.object().clone(), "LOCK-HANDLE".to_owned());

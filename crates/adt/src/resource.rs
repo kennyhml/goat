@@ -3,7 +3,7 @@ use std::fmt;
 use url::Url;
 
 use crate::{
-    AdtUri, AdtUriError, Capabilities, CategoryId, IncludeError, ProgramError,
+    AdtUri, AdtUriError, Capabilities, CategoryId, CompatibilityError, IncludeError, ProgramError,
     vocabulary::{INCLUDES, PROGRAMS},
 };
 const LINK_RESOLUTION_ORIGIN: &str = "https://adt.invalid";
@@ -378,34 +378,46 @@ pub trait FromDiscovery: Sized {
 /// programs collection URI. It looks up the stable programs category and
 /// appends the program name as one encoded path segment.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ProgramRef(ObjectRef);
+pub struct ProgramRef {
+    name: String,
+    object: ObjectRef,
+}
 
 impl ProgramRef {
     #[cfg(test)]
-    pub(crate) fn for_test(uri: AdtUri) -> Self {
-        Self(ObjectRef::new(uri))
+    pub(crate) fn for_test(name: &str, uri: AdtUri) -> Self {
+        Self {
+            name: name.to_ascii_uppercase(),
+            object: ObjectRef::new(uri),
+        }
+    }
+
+    /// Returns the canonical uppercase program name.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns the program object reference.
     pub fn object(&self) -> &ObjectRef {
-        &self.0
+        &self.object
     }
 
     /// Returns the program object URI.
     pub fn uri(&self) -> &AdtUri {
-        self.0.uri()
+        self.object.uri()
     }
 
     /// Returns the program's conventional `source/main` resource.
     ///
     /// This convention belongs to the ADT program resource profile; it is not
-    /// implied by the underlying [`ObjectRef`]. A fetched [`Program`](crate::Program)
-    /// instead exposes the source link advertised by SAP.
+    /// implied by the underlying [`ObjectRef`]. Fetched
+    /// [`ProgramProperties`](crate::ProgramProperties) instead expose the source
+    /// link advertised by SAP.
     pub fn source(&self) -> SourceRef {
         let uri = append_segments(self.uri(), ["source", "main"])
             .expect("static program source path segments form a valid ADT URI");
         SourceRef {
-            object: self.0.clone(),
+            object: self.object.clone(),
             uri,
             query: Vec::new(),
             fragment: None,
@@ -416,7 +428,7 @@ impl ProgramRef {
 
 impl fmt::Display for ProgramRef {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
+        self.object.fmt(formatter)
     }
 }
 
@@ -430,11 +442,15 @@ impl FromDiscovery for ProgramRef {
         program_name: &str,
     ) -> Result<Self, Self::Error> {
         validate_program_name(program_name)?;
+        let program_name = program_name.to_ascii_uppercase();
         let collection = capabilities
             .collection(Self::CATEGORY.scheme, Self::CATEGORY.term)
-            .ok_or(ProgramError::MissingCollection)?;
-        let uri = append_segments(collection.target(), [program_name])?;
-        Ok(Self(ObjectRef::new(uri)))
+            .ok_or(CompatibilityError::MissingCollection(Self::CATEGORY))?;
+        let uri = append_segments(collection.target(), [&program_name])?;
+        Ok(Self {
+            name: program_name,
+            object: ObjectRef::new(uri),
+        })
     }
 }
 
@@ -493,7 +509,7 @@ impl FromDiscovery for IncludeRef {
         validate_include_name(include_name)?;
         let collection = capabilities
             .collection(Self::CATEGORY.scheme, Self::CATEGORY.term)
-            .ok_or(IncludeError::MissingCollection)?;
+            .ok_or(CompatibilityError::MissingCollection(Self::CATEGORY))?;
         let uri = append_segments(collection.target(), [include_name])?;
         Ok(Self(ObjectRef::new(uri)))
     }
@@ -558,10 +574,26 @@ where
 mod tests {
     use super::*;
 
+    const DISCOVERY_XML: &[u8] = include_bytes!("../tests/fixtures/discovery.xml");
+
+    #[test]
+    fn canonicalizes_program_names_when_resolving_references() {
+        let capabilities = crate::models::parse_capabilities(DISCOVERY_XML).unwrap();
+        let program = ProgramRef::from_discovery(&capabilities, "z_program").unwrap();
+
+        assert_eq!(program.name(), "Z_PROGRAM");
+        assert_eq!(
+            program.uri().as_str(),
+            "/sap/bc/adt/programs/programs/Z_PROGRAM"
+        );
+    }
+
     #[test]
     fn derives_the_conventional_source_from_a_program_reference() {
-        let program =
-            ProgramRef::for_test(AdtUri::parse("/sap/bc/adt/programs/programs/ZPROGRAM").unwrap());
+        let program = ProgramRef::for_test(
+            "ZPROGRAM",
+            AdtUri::parse("/sap/bc/adt/programs/programs/ZPROGRAM").unwrap(),
+        );
 
         assert_eq!(
             program.source().uri.as_str(),
