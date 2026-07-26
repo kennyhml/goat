@@ -27,9 +27,9 @@ pub enum CompatibilityError {
 
 /// Describes media-type versions that can participate in content negotiation.
 ///
-/// [`negotiate_media_type`] selects between the caller's preferred versions and
+/// [`negotiate`] selects between the caller's preferred versions and
 /// the representations advertised by the server.
-pub trait NegotiableMediaVersion: Copy + Eq + 'static {
+pub trait NegotiableMediaVersion: Copy + Eq + Send + Sync + 'static {
     /// Media-type versions supported by this client.
     const SUPPORTED: &'static [Self];
 

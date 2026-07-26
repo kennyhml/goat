@@ -10,65 +10,6 @@ pub(crate) fn parse_session_information(body: &[u8]) -> Result<SessionInformatio
     SessionInformation::from_raw(raw)
 }
 
-/// A validated same-destination URI advertised by the HTTP session resource.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct SessionUri(String);
-
-impl SessionUri {
-    const SESSION_LINK_ORIGIN: &str = "https://adt.invalid/";
-
-    fn parse(relation: &str, href: &str) -> Result<Self, LogonError> {
-        let base = Url::parse(Self::SESSION_LINK_ORIGIN).expect("the session-link origin is valid");
-        let resolved = base.join(href).map_err(|_| LogonError::InvalidLink {
-            relation: relation.to_owned(),
-            href: href.to_owned(),
-        })?;
-        if href.is_empty()
-            || href.trim() != href
-            || href.chars().any(char::is_control)
-            || href.contains('\\')
-            || href.starts_with("//")
-            || resolved.origin() != base.origin()
-            || !resolved.path().starts_with("/sap/")
-            || resolved.fragment().is_some()
-        {
-            return Err(LogonError::InvalidLink {
-                relation: relation.to_owned(),
-                href: href.to_owned(),
-            });
-        }
-
-        let mut value = resolved.path().to_owned();
-        if let Some(query) = resolved.query() {
-            value.push('?');
-            value.push_str(query);
-        }
-        Ok(Self(value))
-    }
-
-    /// Returns the destination-relative URI.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for SessionUri {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// The optional system-information resource advertised during logon.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
-pub struct SystemInformationLink {
-    /// The same-destination system-information target.
-    pub target: SessionUri,
-
-    /// The representation media type expected from the target.
-    pub media_type: String,
-}
-
 /// Information advertised for an authenticated ADT HTTP security session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[readonly::make]
@@ -142,6 +83,65 @@ impl SessionInformation {
             inactivity_timeout,
         })
     }
+}
+
+/// A validated same-destination URI advertised by the HTTP session resource.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SessionUri(String);
+
+impl SessionUri {
+    const SESSION_LINK_ORIGIN: &str = "https://adt.invalid/";
+
+    fn parse(relation: &str, href: &str) -> Result<Self, LogonError> {
+        let base = Url::parse(Self::SESSION_LINK_ORIGIN).expect("the session-link origin is valid");
+        let resolved = base.join(href).map_err(|_| LogonError::InvalidLink {
+            relation: relation.to_owned(),
+            href: href.to_owned(),
+        })?;
+        if href.is_empty()
+            || href.trim() != href
+            || href.chars().any(char::is_control)
+            || href.contains('\\')
+            || href.starts_with("//")
+            || resolved.origin() != base.origin()
+            || !resolved.path().starts_with("/sap/")
+            || resolved.fragment().is_some()
+        {
+            return Err(LogonError::InvalidLink {
+                relation: relation.to_owned(),
+                href: href.to_owned(),
+            });
+        }
+
+        let mut value = resolved.path().to_owned();
+        if let Some(query) = resolved.query() {
+            value.push('?');
+            value.push_str(query);
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the destination-relative URI.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for SessionUri {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// The optional system-information resource advertised during logon.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[readonly::make]
+pub struct SystemInformationLink {
+    /// The same-destination system-information target.
+    pub target: SessionUri,
+
+    /// The representation media type expected from the target.
+    pub media_type: String,
 }
 
 fn find_link<'a>(links: &'a [RawLink], relation: &str) -> Option<&'a RawLink> {

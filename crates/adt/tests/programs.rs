@@ -1,8 +1,8 @@
 #![cfg(feature = "reqwest")]
 
 use goat_adt::{
-    AccessMode, Client, Conditional, EntityTag, IncludeMediaVersion, IncludeRef, ObjectVersion,
-    Operation, ProgramMediaVersion, ProgramRef, ReqwestTransport,
+    AccessMode, Client, Conditional, EntityTag, IncludeMediaVersion, IncludeProperties, IncludeRef,
+    ObjectVersion, Operation, ProgramMediaVersion, ProgramProperties, ProgramRef, ReqwestTransport,
 };
 use httpmock::Mock;
 use httpmock::prelude::*;
@@ -152,7 +152,10 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
         .await
         .unwrap();
     assert_eq!(response.media_version(), IncludeMediaVersion::V2);
-    let include = response.into_properties();
+    let include = match response {
+        IncludeProperties::V2(include) => *include,
+        _ => panic!("unexpected include-properties version"),
+    };
     let source = include.source.query().execute(&client).await.unwrap();
 
     assert_eq!(include.reference, reference);
@@ -224,7 +227,10 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     let reference = client.object::<ProgramRef>("Z_TEST").unwrap();
     let response = reference.query().execute(&client).await.unwrap();
     assert_eq!(response.media_version(), ProgramMediaVersion::V3);
-    let program = response.into_properties();
+    let program = match response {
+        ProgramProperties::V3(program) => *program,
+        _ => panic!("unexpected program-properties version"),
+    };
     let source = program.source.query().execute(&client).await.unwrap();
 
     assert_eq!(program.reference, reference);
@@ -385,7 +391,10 @@ async fn program_properties_query_honors_v2_first_priority() {
         .await
         .unwrap();
     assert_eq!(response.media_version(), ProgramMediaVersion::V2);
-    let program = response.into_properties();
+    let program = match response {
+        ProgramProperties::V2(program) => *program,
+        _ => panic!("unexpected program-properties version"),
+    };
 
     assert_eq!(program.name, "Z_TEST");
     assert_eq!(program.version, ObjectVersion::Inactive);

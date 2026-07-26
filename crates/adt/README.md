@@ -177,13 +177,16 @@ reject a `LockHandle` obtained for a different object before any request is sent
 ## Program properties
 
 `ProgramRef::query()` defaults to V3 before V2. Callers can replace that order;
-the first preferred version advertised by central discovery is requested. Both
-wire versions normalize into `ProgramProperties`, wrapped in the corresponding
-`ProgramPropertiesRepresentation::V2` or
-`ProgramPropertiesRepresentation::V3` variant:
+the first preferred version advertised by central discovery is requested. V2
+and V3 use the same payload schema, exposed as `ProgramPropertiesV2` and
+`ProgramPropertiesV3` respectively (`ProgramPropertiesV2` is a type alias for
+`ProgramPropertiesV3`). The payload is wrapped in the corresponding
+`ProgramProperties::V2` or `ProgramProperties::V3` variant:
 
 ```rust,ignore
-use goat_adt::{ObjectVersion, Operation, ProgramMediaVersion, ProgramRef};
+use goat_adt::{
+    ObjectVersion, Operation, ProgramMediaVersion, ProgramProperties, ProgramRef,
+};
 
 let reference = client.object::<ProgramRef>("ZDEMO")?;
 let response = reference
@@ -194,7 +197,10 @@ let response = reference
     .await?;
 println!("media version: {:?}", response.media_version());
 
-let properties = response.into_properties();
+let properties = match response {
+    ProgramProperties::V2(properties) | ProgramProperties::V3(properties) => properties,
+    _ => panic!("unsupported program-properties version"),
+};
 let source = properties.source.query().execute(&client).await?;
 
 assert_eq!(properties.package.name, "$TMP");
@@ -203,9 +209,9 @@ println!("text elements: {:?}", properties.text_elements);
 println!("{}", source.content);
 ```
 
-An unconditional query returns `ProgramPropertiesRepresentation` directly. Calling
+An unconditional query returns `ProgramProperties` directly. Calling
 `.if_none_match(cached_etag)` changes the query mode and its response type to
-`Conditional<ProgramPropertiesRepresentation>`. A current ETag produces
+`Conditional<ProgramProperties>`. A current ETag produces
 `Conditional::NotModified { etag }`; a changed descriptor produces
 `Conditional::Modified(representation)`. An unsolicited `304 Not Modified` is
 rejected when no validator was supplied. HTTP response ETags are stored as
@@ -218,10 +224,10 @@ The optional version is typed as `ObjectVersion` and serializes to `active`,
 from `IF_ADT_URI_QUERY_PARAMETERS`. `CL_SEDI_ADT_RES_SOURCE->GET` reads the
 parameter and `CL_ADT_UTILITY->GET_WB_VERSION` maps it to the Workbench's
 one-character `R3STATE`. Transient requests such as `WorkingArea` can therefore
-produce a returned `ProgramProperties::version` of `Active` or `Inactive`.
+produce a returned `ProgramPropertiesV3::version` of `Active` or `Inactive`.
 
 The private Atom parser resolves every advertised link and retains it in
-`ProgramProperties::links` or the nested `SyntaxLanguage::links`. This preserves unknown
+`ProgramPropertiesV3::links` or the nested `SyntaxLanguage::links`. This preserves unknown
 relations alongside `rel`, media type, title, language, length, query, fragment,
 and SAP ETag metadata. Known relations also produce `SourceRef`,
 `HtmlSourceRef`, `SourceVersionsRef`, `ObjectStructureRef`, `TextElementsRef`,
@@ -229,7 +235,7 @@ enhancement references, `ObjectStateRef`, and `ParserRef`. Bare relative,
 explicit `./`, root-relative, and query-bearing hrefs are resolved against the
 fetched program while their paths remain validated beneath `/sap/bc`.
 `ProgramRef::source()` remains the direct conventional `source/main` reference;
-`ProgramProperties::source` is the location advertised by SAP.
+`ProgramPropertiesV3::source` is the location advertised by SAP.
 
 This conversion was verified against `Z_TEST` on the active A4H backend. V2
 and V3 returned byte-identical XML bodies for that program and distinct,
@@ -262,24 +268,29 @@ collection and V2 representation. Resolution and media negotiation follow the
 same split as programs:
 
 ```rust,ignore
-use goat_adt::{IncludeRef, ObjectVersion, Operation};
+use goat_adt::{IncludeProperties, IncludeRef, ObjectVersion, Operation};
 
 let reference = client.object::<IncludeRef>("ZINCLUDE")?;
-let properties = reference
+let response = reference
     .query()
     .version(ObjectVersion::Active)
     .execute(&client)
-    .await?
-    .into_properties();
+    .await?;
+let properties = match response {
+    IncludeProperties::V2(properties) => properties,
+    _ => panic!("unsupported include-properties version"),
+};
 let source = properties.source.query().execute(&client).await?;
 println!("{}", source.content);
 ```
 
-`IncludeProperties` retains its optional using-object context, package, source
+`IncludePropertiesV2` retains its optional using-object context, package, source
 relations, enhancement relations, and properties ETag. The implementation was
 verified against `ZTEST` on the active A4H backend. `IncludePropertiesQuery`
 supports the same `.if_none_match(etag)` transition and `Conditional` response
-as program properties.
+as program properties. Both public query names specialize the generic
+`ObjectPropertiesQuery`, which centralizes discovery lookup, media negotiation,
+object-version parameters, cache headers, and `200`/`304` handling.
 
 ## Object editing
 

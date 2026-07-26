@@ -9,9 +9,9 @@ generic query kernel while preserving domain-specific public names.
 Proposed shape:
 
 ```rust
-pub struct PropertiesQuery<R, M = Unconditional>
+pub struct ObjectPropertiesQuery<R, M = Unconditional>
 where
-    R: PropertiesResource,
+    R: ObjectProperties,
 {
     resource: R,
     priority: Vec<R::MediaVersion>,
@@ -20,11 +20,11 @@ where
 }
 
 pub type ProgramPropertiesQuery<M = Unconditional> =
-    PropertiesQuery<ProgramRef, M>;
+    ObjectPropertiesQuery<ProgramRef, M>;
 pub type IncludePropertiesQuery<M = Unconditional> =
-    PropertiesQuery<IncludeRef, M>;
+    ObjectPropertiesQuery<IncludeRef, M>;
 pub type ClassPropertiesQuery<M = Unconditional> =
-    PropertiesQuery<ClassRef, M>;
+    ObjectPropertiesQuery<ClassRef, M>;
 ```
 
 The generic layer should own:
@@ -40,10 +40,14 @@ Each sealed resource profile should provide:
 
 - Its typed reference and resource URI.
 - Its discovery `CategoryId`.
-- Its media-version enum, media-type mapping, and default priority.
-- Its properties model and version-tagged representation.
-- Its XML parser and domain error conversion.
-- Its missing or unsupported `Content-Type` policy.
+- Its associated media-version and representation types.
+- Its domain error conversion.
+
+The version-tagged representation implements
+`TryFrom<RawObjectProperties<Reference>>` in the models layer. That conversion
+owns XML parsing and semantic validation. The generic query handles missing or
+unsupported response `Content-Type` values before handing the owned body to the
+model conversion.
 
 Keep `ProgramProperties`, `IncludeProperties`, and future
 `ClassProperties` separate. Their XML schemas, links, and domain semantics are

@@ -1,219 +1,30 @@
 use std::collections::HashMap;
 
 use crate::{
-    AdtUri, AdtUriError, CompatibilityError, EntityTag, NegotiableMediaVersion,
+    AdtUri, AdtUriError, CompatibilityError, ObjectProperties,
+    api::properties::ObjectPropertiesQuery,
     client::{Client, Discovered},
     error::{IncludeError, OperationError, ProgramError, ResponseError},
     models::{
-        IncludeProperties, ProgramProperties, ProgramRunOutput, parse_include_properties,
-        parse_program_properties,
+        IncludeMediaVersion, IncludeProperties, ProgramMediaVersion, ProgramProperties,
+        ProgramRunOutput,
     },
-    negotiate,
-    operation::{IfNoneMatch, Operation, QueryMode, Stateless, Unconditional},
+    operation::{Operation, Stateless, Unconditional},
     protocol::{AdtRequest, AdtResponse},
-    resource::{IncludeRef, ObjectVersion, ProgramRef},
+    resource::{IncludeRef, ProgramRef},
     vocabulary::{
         INCLUDES, PROGRAM_RUN, PROGRAM_RUN_RELATION, PROGRAMS, media_type, query_parameter,
     },
 };
 use derive_builder::Builder;
-use http::{Method, StatusCode, header};
+use http::Method;
 use stduritemplate::Value;
 use url::Url;
 
 const PROGRAM_NAME_VARIABLE: &str = "programname";
 
-/// Program properties tagged with the media-type version returned by SAP.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub enum ProgramPropertiesRepresentation {
-    V2(Box<ProgramProperties>),
-    V3(Box<ProgramProperties>),
-}
-
-impl ProgramPropertiesRepresentation {
-    /// Returns the response media-type version.
-    pub fn media_version(&self) -> ProgramMediaVersion {
-        match self {
-            Self::V2(_) => ProgramMediaVersion::V2,
-            Self::V3(_) => ProgramMediaVersion::V3,
-        }
-    }
-
-    /// Borrows the normalized program properties.
-    pub fn as_properties(&self) -> &ProgramProperties {
-        match self {
-            Self::V2(program) | Self::V3(program) => program.as_ref(),
-        }
-    }
-
-    /// Consumes the representation and returns the descriptor.
-    pub fn into_properties(self) -> ProgramProperties {
-        match self {
-            Self::V2(program) | Self::V3(program) => *program,
-        }
-    }
-
-    /// Returns the response entity tag, when present.
-    pub fn etag(&self) -> Option<&str> {
-        match self {
-            Self::V2(program) | Self::V3(program) => program.etag.as_deref(),
-        }
-    }
-}
-
-/// Include properties tagged with the media-type version returned by SAP.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub enum IncludePropertiesRepresentation {
-    V2(Box<IncludeProperties>),
-}
-
-impl IncludePropertiesRepresentation {
-    /// Returns the response media-type version.
-    pub fn media_version(&self) -> IncludeMediaVersion {
-        match self {
-            Self::V2(_) => IncludeMediaVersion::V2,
-        }
-    }
-
-    /// Borrows the normalized include properties.
-    pub fn as_properties(&self) -> &IncludeProperties {
-        match self {
-            Self::V2(include) => include.as_ref(),
-        }
-    }
-
-    /// Consumes the representation and returns the properties.
-    pub fn into_properties(self) -> IncludeProperties {
-        match self {
-            Self::V2(include) => *include,
-        }
-    }
-
-    /// Returns the response entity tag, when present.
-    pub fn etag(&self) -> Option<&str> {
-        match self {
-            Self::V2(include) => include.etag.as_deref(),
-        }
-    }
-}
-
-/// Fetches the properties of a program.
-///
-/// Programs may have multiple fetchable versions. Specify a version with
-/// the [`ObjectVersion`](crate::ObjectVersion) parameter. When different
-/// media types are available for usage, the latest common representation
-/// will be selected. If this is not possible, an error is returned.
-///
-/// This operation supports E-Tag handling via the [`QueryMode`] response
-/// decorator. The result of the operation changes when an etag is supplied.
-///
-/// Backend handler: `CL_SEDI_ADT_RES_SOURCE`
-#[derive(Debug)]
-#[readonly::make]
-pub struct ProgramPropertiesQuery<M = Unconditional> {
-    /// The program resource to fetch.
-    pub program: ProgramRef,
-
-    /// Media-type versions in descending caller preference.
-    pub priority: Vec<ProgramMediaVersion>,
-
-    /// The repository-object version to request.
-    pub version: Option<ObjectVersion>,
-
-    mode: M,
-}
-
-impl<M> ProgramPropertiesQuery<M> {
-    /// Replaces the media-type preference order.
-    pub fn priority(mut self, priority: impl Into<Vec<ProgramMediaVersion>>) -> Self {
-        self.priority = priority.into();
-        self
-    }
-
-    /// Selects the repository-object version to request.
-    pub fn version(mut self, version: ObjectVersion) -> Self {
-        self.version = Some(version);
-        self
-    }
-}
-
-impl ProgramPropertiesQuery<Unconditional> {
-    /// Makes this query conditional on the supplied properties ETag.
-    pub fn if_none_match(self, etag: EntityTag) -> ProgramPropertiesQuery<IfNoneMatch> {
-        ProgramPropertiesQuery {
-            program: self.program,
-            priority: self.priority,
-            version: self.version,
-            mode: IfNoneMatch { etag },
-        }
-    }
-}
-
-impl<M: QueryMode<ProgramPropertiesRepresentation>> Operation<Discovered>
-    for ProgramPropertiesQuery<M>
-{
-    type Response = M::Response;
-    type Kind = Stateless;
-
-    fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
-        let collection = client
-            .collection(PROGRAMS)
-            .ok_or(CompatibilityError::MissingCollection(PROGRAMS))?;
-
-        let accept = negotiate(&self.priority, collection.accepted_media_types())?;
-
-        let mut request = AdtRequest::new(Method::GET, self.program.uri().clone());
-        if let Some(version) = self.version {
-            request.push_query(query_parameter::VERSION, version.as_str());
-        }
-        request.set_accept(accept.media_type());
-        request.set_cache_revalidation(self.mode.if_none_match());
-        Ok(request)
-    }
-
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
-        if response.status() == StatusCode::NOT_MODIFIED {
-            return self
-                .mode
-                .not_modified(response_etag(&response))
-                .ok_or(ResponseError::UnexpectedNotModified);
-        }
-        if response.status() != StatusCode::OK {
-            return Err(ResponseError::UnexpectedStatus {
-                status: response.status(),
-                body: String::from_utf8_lossy(response.body()).into_owned(),
-            });
-        }
-
-        let content_type = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .ok_or(ProgramError::MissingContentType)?;
-        let representation =
-            ProgramMediaVersion::from_media_type(content_type).ok_or_else(|| {
-                ProgramError::UnsupportedContentType {
-                    content_type: content_type.to_owned(),
-                }
-            })?;
-        let properties = parse_program_properties(
-            self.program.clone(),
-            response.body(),
-            response_etag(&response),
-        )?;
-        let representation = match representation.kind {
-            ProgramRepresentationKind::V2 => {
-                ProgramPropertiesRepresentation::V2(Box::new(properties))
-            }
-            ProgramRepresentationKind::V3 => {
-                ProgramPropertiesRepresentation::V3(Box::new(properties))
-            }
-        };
-        Ok(self.mode.modified(representation))
-    }
-}
+/// Fetches program properties using the generic object-properties protocol.
+pub type ProgramPropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<ProgramRef, M>;
 
 /// Runs an executable ABAP program and returns its rendered console output.
 ///
@@ -273,129 +84,13 @@ impl Operation<Discovered> for ProgramRun {
     }
 }
 
-/// Fetches the properties of an include.
-///
-/// Includes may have multiple fetchable versions. Specify a version with
-/// the [`ObjectVersion`](crate::ObjectVersion) parameter. When different
-/// media types are available for usage, the latest common representation
-/// will be selected. If this is not possible, an error is returned.
-///
-/// This operation supports E-Tag handling via the [`QueryMode`] response
-/// decorator. The result of the operation changes when an etag is supplied.
-///
-/// The E-Tag of an the include changes when its main program or other
-/// surrounding context changes.
-///
-/// Backend handler: `CL_SEDI_ADT_RES_SOURCE`
-#[derive(Debug)]
-#[readonly::make]
-pub struct IncludePropertiesQuery<M = Unconditional> {
-    /// The include resource to fetch.
-    pub include: IncludeRef,
-
-    /// Media-type versions in descending caller preference.
-    pub priority: Vec<IncludeMediaVersion>,
-
-    /// The repository-object version to request.
-    pub version: Option<ObjectVersion>,
-
-    mode: M,
-}
-
-impl<M> IncludePropertiesQuery<M> {
-    /// Replaces the media-type preference order.
-    pub fn priority(mut self, priority: impl Into<Vec<IncludeMediaVersion>>) -> Self {
-        self.priority = priority.into();
-        self
-    }
-
-    /// Selects the repository-object version to request.
-    pub fn version(mut self, version: ObjectVersion) -> Self {
-        self.version = Some(version);
-        self
-    }
-}
-
-impl IncludePropertiesQuery<Unconditional> {
-    /// Makes this query conditional on the supplied properties ETag.
-    pub fn if_none_match(self, etag: EntityTag) -> IncludePropertiesQuery<IfNoneMatch> {
-        IncludePropertiesQuery {
-            include: self.include,
-            priority: self.priority,
-            version: self.version,
-            mode: IfNoneMatch { etag },
-        }
-    }
-}
-
-impl<M: QueryMode<IncludePropertiesRepresentation>> Operation<Discovered>
-    for IncludePropertiesQuery<M>
-{
-    type Response = M::Response;
-    type Kind = Stateless;
-
-    fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
-        let collection = client
-            .collection(INCLUDES)
-            .ok_or(CompatibilityError::MissingCollection(INCLUDES))?;
-
-        let accept = negotiate(&self.priority, collection.accepted_media_types())?;
-
-        let mut request = AdtRequest::new(Method::GET, self.include.uri().clone());
-        if let Some(version) = self.version {
-            request.push_query(query_parameter::VERSION, version.as_str());
-        }
-        request.set_accept(accept.media_type());
-        request.set_cache_revalidation(self.mode.if_none_match());
-        Ok(request)
-    }
-
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
-        if response.status() == StatusCode::NOT_MODIFIED {
-            return self
-                .mode
-                .not_modified(response_etag(&response))
-                .ok_or(ResponseError::UnexpectedNotModified);
-        }
-        if response.status() != StatusCode::OK {
-            return Err(ResponseError::UnexpectedStatus {
-                status: response.status(),
-                body: String::from_utf8_lossy(response.body()).into_owned(),
-            });
-        }
-
-        let content_type = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .ok_or(IncludeError::MissingContentType)?;
-        let representation =
-            IncludeMediaVersion::from_media_type(content_type).ok_or_else(|| {
-                IncludeError::UnsupportedContentType {
-                    content_type: content_type.to_owned(),
-                }
-            })?;
-        let properties = parse_include_properties(
-            self.include.clone(),
-            response.body(),
-            response_etag(&response),
-        )?;
-        let representation = match representation {
-            IncludeMediaVersion::V2 => IncludePropertiesRepresentation::V2(Box::new(properties)),
-        };
-        Ok(self.mode.modified(representation))
-    }
-}
+/// Fetches include properties using the generic object-properties protocol.
+pub type IncludePropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<IncludeRef, M>;
 
 impl ProgramRef {
     /// Creates an unconditional operation that fetches this program's metadata.
     pub fn query(&self) -> ProgramPropertiesQuery {
-        ProgramPropertiesQuery {
-            program: self.clone(),
-            priority: ProgramMediaVersion::SUPPORTED.to_vec(),
-            version: None,
-            mode: Unconditional,
-        }
+        ObjectPropertiesQuery::new(self.clone())
     }
 
     /// Creates a builder for an operation that runs this program.
@@ -409,84 +104,39 @@ impl ProgramRef {
 impl IncludeRef {
     /// Creates an unconditional operation that fetches this include's metadata.
     pub fn query(&self) -> IncludePropertiesQuery {
-        IncludePropertiesQuery {
-            include: self.clone(),
-            priority: IncludeMediaVersion::SUPPORTED.to_vec(),
-            version: None,
-            mode: Unconditional,
-        }
+        ObjectPropertiesQuery::new(self.clone())
     }
 }
 
-/// The SAP media-type version used to decode program properties.
-///
-/// `ProgramPropertiesQuery` defaults to V3 before V2, and callers can supply a
-/// different preference. Both representations are normalized into
-/// [`ProgramProperties`], because there seems to be no difference between V2
-/// and V3.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct ProgramMediaVersion {
-    media_type: &'static str,
-    kind: ProgramRepresentationKind,
-}
+impl crate::object_properties::private::Sealed for ProgramRef {}
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum ProgramRepresentationKind {
-    V2,
-    V3,
-}
+impl ObjectProperties for ProgramRef {
+    type MediaVersion = ProgramMediaVersion;
+    type Representation = ProgramProperties;
+    type Error = ProgramError;
 
-impl ProgramMediaVersion {
-    pub const V2: Self = Self {
-        media_type: "application/vnd.sap.adt.programs.programs.v2+xml",
-        kind: ProgramRepresentationKind::V2,
-    };
+    const CATEGORY: crate::CategoryId = PROGRAMS;
 
-    pub const V3: Self = Self {
-        media_type: "application/vnd.sap.adt.programs.programs.v3+xml",
-        kind: ProgramRepresentationKind::V3,
-    };
-}
-
-impl NegotiableMediaVersion for ProgramMediaVersion {
-    const SUPPORTED: &'static [Self] = &[Self::V3, Self::V2];
-
-    fn media_type(self) -> &'static str {
-        self.media_type
+    fn properties_uri(&self) -> &AdtUri {
+        self.uri()
     }
 }
 
-/// The SAP media-type version used to decode include properties.
-///
-/// Only V2 is currently advertised by tested systems, but modeling the version
-/// keeps include negotiation aligned with the rest of the programs domain.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum IncludeMediaVersion {
-    V2,
-}
+impl crate::object_properties::private::Sealed for IncludeRef {}
 
-impl IncludeMediaVersion {
-    const V2_MEDIA_TYPE: &'static str = "application/vnd.sap.adt.programs.includes.v2+xml";
-}
+impl ObjectProperties for IncludeRef {
+    type MediaVersion = IncludeMediaVersion;
+    type Representation = IncludeProperties;
+    type Error = IncludeError;
 
-impl NegotiableMediaVersion for IncludeMediaVersion {
-    const SUPPORTED: &'static [Self] = &[Self::V2];
+    const CATEGORY: crate::CategoryId = INCLUDES;
 
-    fn media_type(self) -> &'static str {
-        match self {
-            Self::V2 => Self::V2_MEDIA_TYPE,
-        }
+    fn properties_uri(&self) -> &AdtUri {
+        self.uri()
     }
 }
 
 // TODO: Move this to common utils or even into AdtResponse
-fn response_etag(response: &AdtResponse) -> Option<EntityTag> {
-    response
-        .headers()
-        .get(header::ETAG)
-        .and_then(EntityTag::from_header_value)
-}
-
 fn program_run_template(client: &Client<Discovered>) -> Result<&str, OperationError> {
     let collection = client
         .collection(PROGRAM_RUN)
@@ -609,10 +259,10 @@ fn program_operation_error(error: ProgramError) -> OperationError {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use http::{HeaderMap, HeaderValue};
+    use http::{HeaderMap, HeaderValue, StatusCode, header};
 
     use super::*;
-    use crate::Conditional;
+    use crate::{Conditional, EntityTag, NegotiableMediaVersion};
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
     const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
@@ -772,10 +422,7 @@ mod tests {
         let representation = program_properties_query()
             .decode(program_properties_response(ProgramMediaVersion::V2))
             .unwrap();
-        assert!(matches!(
-            representation,
-            ProgramPropertiesRepresentation::V2(_)
-        ));
+        assert!(matches!(representation, ProgramProperties::V2(_)));
     }
 
     #[test]
@@ -783,9 +430,48 @@ mod tests {
         let representation = program_properties_query()
             .decode(program_properties_response(ProgramMediaVersion::V3))
             .unwrap();
+        assert!(matches!(representation, ProgramProperties::V3(_)));
+    }
+
+    #[test]
+    fn properties_query_requires_a_response_content_type() {
+        let response = AdtResponse::new(
+            StatusCode::OK,
+            HeaderMap::new(),
+            PROGRAM_XML.as_bytes().to_vec(),
+        );
+
+        let error = program_properties_query().decode(response).unwrap_err();
+
         assert!(matches!(
-            representation,
-            ProgramPropertiesRepresentation::V3(_)
+            error,
+            ResponseError::MissingContentType { category } if category == PROGRAMS
+        ));
+    }
+
+    #[test]
+    fn properties_query_reports_an_unsupported_response_content_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let response = AdtResponse::new(StatusCode::OK, headers, PROGRAM_XML.as_bytes().to_vec());
+
+        let error = program_properties_query().decode(response).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ResponseError::UnsupportedContentType {
+                category,
+                content_type,
+                supported,
+            } if category == PROGRAMS
+                && content_type == "application/json"
+                && supported == [
+                    ProgramMediaVersion::V3.media_type(),
+                    ProgramMediaVersion::V2.media_type(),
+                ]
         ));
     }
 
@@ -798,7 +484,7 @@ mod tests {
 
         assert!(matches!(
             response,
-            Conditional::Modified(ProgramPropertiesRepresentation::V3(_))
+            Conditional::Modified(ProgramProperties::V3(_))
         ));
     }
 
@@ -821,10 +507,7 @@ mod tests {
         let response = AdtResponse::new(StatusCode::OK, headers, INCLUDE_XML.as_bytes().to_vec());
 
         let representation = include_properties_query().decode(response).unwrap();
-        assert!(matches!(
-            representation,
-            IncludePropertiesRepresentation::V2(_)
-        ));
+        assert!(matches!(representation, IncludeProperties::V2(_)));
         assert_eq!(representation.etag(), Some("include-etag"));
     }
 

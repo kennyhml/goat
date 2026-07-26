@@ -3,7 +3,7 @@ use std::{error::Error as StdError, fmt};
 use http::StatusCode;
 use thiserror::Error;
 
-use crate::{AdtUriError, CompatibilityError};
+use crate::{AdtUriError, CategoryId, CompatibilityError};
 
 #[cfg(feature = "reqwest")]
 #[derive(Debug, Error)]
@@ -124,12 +124,6 @@ pub enum ProgramError {
     #[error("unsupported program object version `{version}`")]
     UnsupportedObjectVersion { version: String },
 
-    #[error("program response did not include a Content-Type header")]
-    MissingContentType,
-
-    #[error("unsupported program response Content-Type `{content_type}`")]
-    UnsupportedContentType { content_type: String },
-
     #[error("program source attribute `{declared}` disagrees with source relation `{advertised}`")]
     SourceLinkMismatch {
         declared: String,
@@ -164,12 +158,6 @@ pub enum IncludeError {
 
     #[error("include response did not advertise a plain-text source link")]
     MissingSourceLink,
-
-    #[error("include response did not include a Content-Type header")]
-    MissingContentType,
-
-    #[error("unsupported include response Content-Type `{content_type}`")]
-    UnsupportedContentType { content_type: String },
 
     #[error("unsupported include object version `{version}`")]
     UnsupportedObjectVersion { version: String },
@@ -206,6 +194,18 @@ pub enum ResponseError {
 
     #[error("ADT returned 304 Not Modified without an If-None-Match validator")]
     UnexpectedNotModified,
+
+    #[error("ADT response for collection {category:?} did not include a Content-Type header")]
+    MissingContentType { category: CategoryId },
+
+    #[error(
+        "ADT response for collection {category:?} used unsupported Content-Type `{content_type}`; supported media types: {supported:?}"
+    )]
+    UnsupportedContentType {
+        category: CategoryId,
+        content_type: String,
+        supported: Vec<String>,
+    },
 
     #[error(transparent)]
     Discovery(#[from] DiscoveryError),

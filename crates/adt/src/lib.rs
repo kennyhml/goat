@@ -5,6 +5,7 @@ mod client;
 mod compatibility;
 mod error;
 mod models;
+mod object_properties;
 mod operation;
 mod protocol;
 mod resource;
@@ -19,10 +20,10 @@ pub use api::object::{
     ObjectSourceUpdateBuilderError, ObjectUnlock,
 };
 pub use api::programs::{
-    IncludeMediaVersion, IncludePropertiesQuery, IncludePropertiesRepresentation,
-    ProgramMediaVersion, ProgramPropertiesQuery, ProgramPropertiesRepresentation, ProgramRun,
-    ProgramRunBuilder, ProgramRunBuilderError,
+    IncludePropertiesQuery, ProgramPropertiesQuery, ProgramRun, ProgramRunBuilder,
+    ProgramRunBuilderError,
 };
+pub use api::properties::ObjectPropertiesQuery;
 pub use api::session::{Logon, SessionMediaVersion};
 pub use client::{Client, ClientState, Discovered, LoggedOn, LoggedOnState, Unauthenticated};
 pub use compatibility::{CompatibilityError, NegotiableMediaVersion, negotiate};
@@ -33,10 +34,12 @@ pub use error::{
     ResponseError, TransportError,
 };
 pub use models::{
-    AccessMode, Capabilities, Category, Collection, IncludeProperties, LockHandle,
-    ProgramProperties, ProgramRunOutput, SessionInformation, SessionUri, SourceCode,
+    AccessMode, Capabilities, Category, Collection, IncludeMediaVersion, IncludeProperties,
+    IncludePropertiesV2, LockHandle, ProgramMediaVersion, ProgramProperties, ProgramPropertiesV2,
+    ProgramPropertiesV3, ProgramRunOutput, SessionInformation, SessionUri, SourceCode,
     SyntaxConfiguration, SyntaxLanguage, SystemInformationLink, TemplateLink, Workspace,
 };
+pub use object_properties::{ObjectProperties, RawObjectProperties};
 pub use operation::{
     Conditional, Executor, IfNoneMatch, Operation, OperationKind, QueryMode, Stateful, Stateless,
     Unconditional, UserSession,

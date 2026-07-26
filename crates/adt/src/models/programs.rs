@@ -2,30 +2,147 @@ use serde::Deserialize;
 
 use crate::{
     AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, EntityTag, HtmlSourceRef,
-    IncludeError, IncludeRef, ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion,
-    PackageRef, ParserRef, ProgramError, ProgramRef, SourceRef, SourceVersionsRef, TextElementsRef,
+    IncludeError, IncludeRef, NegotiableMediaVersion, ObjectRef, ObjectStateRef,
+    ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, ProgramError, ProgramRef,
+    RawObjectProperties, SourceRef, SourceVersionsRef, TextElementsRef,
     resource::{AdtLinkMetadata, resolve_href},
     vocabulary::{Relation, media_type},
 };
 
-pub(crate) fn parse_program_properties(
-    reference: ProgramRef,
-    body: &[u8],
-    etag: Option<EntityTag>,
-) -> Result<ProgramProperties, ProgramError> {
-    let raw: RawProgramProperties =
-        serde_xml_rs::from_reader(body).map_err(ProgramError::InvalidResponse)?;
-    ProgramProperties::from_raw(reference, raw, etag)
+/// Program properties tagged with the media-type version returned by SAP.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum ProgramProperties {
+    V2(Box<ProgramPropertiesV2>),
+    V3(Box<ProgramPropertiesV3>),
 }
 
-pub(crate) fn parse_include_properties(
-    reference: IncludeRef,
-    body: &[u8],
-    etag: Option<EntityTag>,
-) -> Result<IncludeProperties, IncludeError> {
-    let raw: RawIncludeProperties =
-        serde_xml_rs::from_reader(body).map_err(IncludeError::InvalidResponse)?;
-    IncludeProperties::from_raw(reference, raw, etag)
+impl ProgramProperties {
+    /// Returns the response media-type version.
+    pub fn media_version(&self) -> ProgramMediaVersion {
+        match self {
+            Self::V2(_) => ProgramMediaVersion::V2,
+            Self::V3(_) => ProgramMediaVersion::V3,
+        }
+    }
+
+    /// Returns the response entity tag, when present.
+    pub fn etag(&self) -> Option<&EntityTag> {
+        match self {
+            Self::V2(program) | Self::V3(program) => program.etag.as_ref(),
+        }
+    }
+}
+
+/// The SAP media-type version used to decode program properties.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ProgramMediaVersion {
+    media_type: &'static str,
+    kind: ProgramRepresentationKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ProgramRepresentationKind {
+    V2,
+    V3,
+}
+
+impl ProgramMediaVersion {
+    pub const V2: Self = Self {
+        media_type: "application/vnd.sap.adt.programs.programs.v2+xml",
+        kind: ProgramRepresentationKind::V2,
+    };
+
+    pub const V3: Self = Self {
+        media_type: "application/vnd.sap.adt.programs.programs.v3+xml",
+        kind: ProgramRepresentationKind::V3,
+    };
+}
+
+impl NegotiableMediaVersion for ProgramMediaVersion {
+    const SUPPORTED: &'static [Self] = &[Self::V3, Self::V2];
+
+    fn media_type(self) -> &'static str {
+        self.media_type
+    }
+}
+
+impl TryFrom<RawObjectProperties<ProgramRef>> for ProgramProperties {
+    type Error = ProgramError;
+
+    fn try_from(raw: RawObjectProperties<ProgramRef>) -> Result<Self, Self::Error> {
+        let RawObjectProperties {
+            resource,
+            version: media_version,
+            body,
+            etag,
+        } = raw;
+        let parsed: RawProgramProperties =
+            serde_xml_rs::from_reader(body.as_slice()).map_err(ProgramError::InvalidResponse)?;
+        let properties = ProgramPropertiesV3::from_raw(resource, parsed, etag)?;
+        Ok(match media_version.kind {
+            ProgramRepresentationKind::V2 => Self::V2(Box::new(properties)),
+            ProgramRepresentationKind::V3 => Self::V3(Box::new(properties)),
+        })
+    }
+}
+
+/// Include properties tagged with the media-type version returned by SAP.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum IncludeProperties {
+    V2(Box<IncludePropertiesV2>),
+}
+
+impl IncludeProperties {
+    /// Returns the response media-type version.
+    pub fn media_version(&self) -> IncludeMediaVersion {
+        match self {
+            Self::V2(_) => IncludeMediaVersion::V2,
+        }
+    }
+
+    /// Returns the response entity tag, when present.
+    pub fn etag(&self) -> Option<&str> {
+        match self {
+            Self::V2(include) => include.etag.as_deref(),
+        }
+    }
+}
+
+/// The SAP media-type version used to decode include properties.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum IncludeMediaVersion {
+    V2,
+}
+
+impl NegotiableMediaVersion for IncludeMediaVersion {
+    const SUPPORTED: &'static [Self] = &[Self::V2];
+
+    fn media_type(self) -> &'static str {
+        match self {
+            Self::V2 => "application/vnd.sap.adt.programs.includes.v2+xml",
+        }
+    }
+}
+
+impl TryFrom<RawObjectProperties<IncludeRef>> for IncludeProperties {
+    type Error = IncludeError;
+
+    fn try_from(raw: RawObjectProperties<IncludeRef>) -> Result<Self, Self::Error> {
+        let RawObjectProperties {
+            resource,
+            version,
+            body,
+            etag,
+        } = raw;
+        let parsed: RawIncludeProperties =
+            serde_xml_rs::from_reader(body.as_slice()).map_err(IncludeError::InvalidResponse)?;
+        let properties = IncludePropertiesV2::from_raw(resource, parsed, etag)?;
+        Ok(match version {
+            IncludeMediaVersion::V2 => Self::V2(Box::new(properties)),
+        })
+    }
 }
 
 /// The plain-text console output produced by running an ABAP program.
@@ -45,14 +162,17 @@ impl ProgramRunOutput {
     }
 }
 
-/// Fetched ABAP program properties normalized from V2 or V3 XML.
+/// The V2 program-properties representation uses the V3 payload schema.
+pub type ProgramPropertiesV2 = ProgramPropertiesV3;
+
+/// The ABAP program-properties payload shared by the V2 and V3 media types.
 /// TODO: Lazily resolve the associations instead? Saves us doing a
 /// bunch of potentially not needed work ahead of time, but also
 /// means we dont define a clear contract for the user in terms of
 /// what the model may reference.
 #[derive(Clone, Debug)]
 #[readonly::make]
-pub struct ProgramProperties {
+pub struct ProgramPropertiesV3 {
     /// The program resource that was fetched.
     pub reference: ProgramRef,
 
@@ -147,7 +267,7 @@ pub struct ProgramProperties {
     pub etag: Option<EntityTag>,
 }
 
-impl ProgramProperties {
+impl ProgramPropertiesV3 {
     fn from_raw(
         reference: ProgramRef,
         raw: RawProgramProperties,
@@ -243,10 +363,10 @@ impl ProgramProperties {
     }
 }
 
-/// Fetched standalone ABAP include properties.
+/// The V2 standalone ABAP include-properties payload.
 #[derive(Clone, Debug)]
 #[readonly::make]
-pub struct IncludeProperties {
+pub struct IncludePropertiesV2 {
     /// The include resource that was fetched.
     pub reference: IncludeRef,
 
@@ -329,7 +449,7 @@ pub struct IncludeProperties {
     pub etag: Option<EntityTag>,
 }
 
-impl IncludeProperties {
+impl IncludePropertiesV2 {
     fn from_raw(
         reference: IncludeRef,
         raw: RawIncludeProperties,
@@ -690,18 +810,22 @@ mod tests {
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
     const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
 
-    fn parse(body: &str) -> Result<ProgramProperties, ProgramError> {
-        parse_program_properties(
-            ProgramRef::for_test(
+    fn parse(body: &str) -> Result<ProgramPropertiesV3, ProgramError> {
+        let properties = ProgramProperties::try_from(RawObjectProperties {
+            resource: ProgramRef::for_test(
                 "Z_TEST",
                 crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
             ),
-            body.as_bytes(),
-            Some(EntityTag::from_static("program-etag")),
-        )
+            version: ProgramMediaVersion::V3,
+            body: body.as_bytes().to_vec(),
+            etag: Some(EntityTag::from_static("program-etag")),
+        })?;
+        Ok(match properties {
+            ProgramProperties::V2(properties) | ProgramProperties::V3(properties) => *properties,
+        })
     }
 
-    fn assert_program(program: &ProgramProperties) {
+    fn assert_program(program: &ProgramPropertiesV3) {
         assert_eq!(program.name, "Z_TEST");
         assert_eq!(program.version, ObjectVersion::Inactive);
         assert_eq!(program.etag.as_deref(), Some("program-etag"));
@@ -730,12 +854,15 @@ mod tests {
         let reference = IncludeRef::for_test(
             crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
         );
-        let include = parse_include_properties(
-            reference.clone(),
-            INCLUDE_XML.as_bytes(),
-            Some(EntityTag::from_static("include-etag")),
-        )
+        let properties = IncludeProperties::try_from(RawObjectProperties {
+            resource: reference.clone(),
+            version: IncludeMediaVersion::V2,
+            body: INCLUDE_XML.as_bytes().to_vec(),
+            etag: Some(EntityTag::from_static("include-etag")),
+        })
         .unwrap();
+        let IncludeProperties::V2(include) = properties;
+        let include = *include;
 
         assert_eq!(include.reference, reference);
         assert_eq!(include.name, "ZTEST");

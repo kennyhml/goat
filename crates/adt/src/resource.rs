@@ -411,7 +411,7 @@ impl ProgramRef {
     ///
     /// This convention belongs to the ADT program resource profile; it is not
     /// implied by the underlying [`ObjectRef`]. Fetched
-    /// [`ProgramProperties`](crate::ProgramProperties) instead expose the source
+    /// [`ProgramPropertiesV3`](crate::ProgramPropertiesV3) instead exposes the source
     /// link advertised by SAP.
     pub fn source(&self) -> SourceRef {
         let uri = append_segments(self.uri(), ["source", "main"])
