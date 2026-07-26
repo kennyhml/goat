@@ -11,6 +11,8 @@ use crate::{AdtRequest, AdtResponse, ReqwestTransportBuildError, Transport, Tran
 
 const CSRF_TOKEN_HEADER: &str = "x-csrf-token";
 const CSRF_FETCH: &str = "Fetch";
+const ADT_SESSION_TYPE_HEADER: &str = "x-sap-adt-sessiontype";
+const STATELESS_SESSION_TYPE: &str = "stateless";
 
 /// An ADT transport backed by `reqwest`.
 ///
@@ -174,6 +176,10 @@ impl ReqwestTransport {
             .map_err(TransportError::new)?;
         let mut headers = HeaderMap::new();
         headers.insert(CSRF_TOKEN_HEADER, HeaderValue::from_static(CSRF_FETCH));
+        headers.insert(
+            ADT_SESSION_TYPE_HEADER,
+            HeaderValue::from_static(STATELESS_SESSION_TYPE),
+        );
         merge_cookie_headers(&mut headers, self.cookies.cookies(&url))
             .map_err(TransportError::new)?;
 

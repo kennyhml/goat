@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, fmt};
 
-use http::StatusCode;
+use http::{StatusCode, header::InvalidHeaderValue};
 use thiserror::Error;
 
 use crate::AdtUriError;
@@ -43,7 +43,7 @@ pub enum DiscoveryError {
     },
 }
 
-/// An error resolving a program resource from central discovery.
+/// An error resolving or decoding a program resource.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ProgramError {
@@ -55,6 +55,44 @@ pub enum ProgramError {
 
     #[error("could not construct the program resource URI: {0}")]
     InvalidTarget(#[from] AdtUriError),
+
+    #[error("invalid program XML: {0}")]
+    InvalidResponse(#[source] serde_xml_rs::Error),
+
+    #[error("program link `{href}` could not be resolved: {source}")]
+    InvalidLink { href: String, source: AdtUriError },
+
+    #[error("program package URI `{uri}` is invalid: {source}")]
+    InvalidPackageUri { uri: String, source: AdtUriError },
+
+    #[error("program response did not advertise a plain-text source link")]
+    MissingSourceLink,
+
+    #[error("invalid program entity tag: {0}")]
+    InvalidEntityTag(#[source] InvalidHeaderValue),
+
+    #[error("unsupported program object version `{version}`")]
+    UnsupportedObjectVersion { version: String },
+
+    #[error(
+        "none of the preferred program representations {preferred:?} are advertised by the programs collection: {accepted:?}"
+    )]
+    UnsupportedRepresentation {
+        preferred: Vec<String>,
+        accepted: Vec<String>,
+    },
+
+    #[error("program response did not include a Content-Type header")]
+    MissingContentType,
+
+    #[error("unsupported program response Content-Type `{content_type}`")]
+    UnsupportedContentType { content_type: String },
+
+    #[error("program source attribute `{declared}` disagrees with source relation `{advertised}`")]
+    SourceLinkMismatch {
+        declared: String,
+        advertised: String,
+    },
 }
 
 /// An error in a generic ADT object operation or representation.
@@ -85,6 +123,9 @@ pub enum ResponseError {
 
     #[error(transparent)]
     Object(#[from] ObjectError),
+
+    #[error(transparent)]
+    Program(#[from] ProgramError),
 }
 
 #[derive(Debug, Error)]

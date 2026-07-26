@@ -1,116 +1,11 @@
-use http::{HeaderValue, Method, header};
 use serde::Deserialize;
 use url::Url;
 
-use crate::{
-    AdtRequest, AdtResponse, AdtUri, Client, ClientState, DiscoveryError, Operation,
-    OperationError, ResponseError, Stateless,
-};
+use crate::{AdtUri, DiscoveryError};
 
-const DISCOVERY_MEDIA_TYPE: &str = "application/atomsvc+xml";
-
-/// Fetches the small, fixed ADT bootstrap capability document.
-///
-/// `GET /sap/bc/adt/core/discovery` returns an AtomPub service document with
-/// infrastructure collections such as compatibility and batch resources. It
-/// is distinct from [`DiscoveryQuery`], which advertises the domain workspaces
-/// and collections used by most ADT operations.
-///
-/// The endpoint is known in advance, so this operation can execute with any
-/// [`ClientState`]. Executing it returns [`Capabilities`] but does not perform
-/// the [`Client::discover`](crate::Client::discover) typestate transition.
-///
-/// # Observed server handlers
-///
-/// SAP's ADT development diagnostics map this endpoint to:
-///
-/// - `CL_ADT_DISCOVERY_BASE_RES_APP->REGISTER_RESOURCES` for registration;
-/// - `CL_ADT_RES_DISCOVERY_BASE->GET` for the `GET` implementation.
-///
-/// These ABAP classes are implementation details that can vary by SAP release;
-/// the operation depends only on the HTTP and AtomPub contract.
-#[derive(Debug, Default)]
-pub struct CoreDiscoveryQuery;
-
-impl<S: ClientState> Operation<S> for CoreDiscoveryQuery {
-    type Response = Capabilities;
-    type Kind = Stateless;
-
-    fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
-        let target = AdtUri::parse("/sap/bc/adt/core/discovery")
-            .expect("the core discovery target is a valid static ADT URI");
-        let mut request = AdtRequest::new(Method::GET, target);
-        request.headers_mut().insert(
-            header::ACCEPT,
-            HeaderValue::from_static(DISCOVERY_MEDIA_TYPE),
-        );
-        Ok(request)
-    }
-
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
-        decode_discovery_response(response)
-    }
-}
-
-/// Fetches the central ADT capability document.
-///
-/// `GET /sap/bc/adt/discovery` returns an AtomPub service document containing
-/// the server's domain workspaces and collections. Each collection can
-/// advertise its resource URI, stable category identities, accepted media
-/// types, and URI template links. Discovery supplies the top-level capability
-/// map; resource-specific links can still come from later representations.
-///
-/// The endpoint is known in advance, so this operation can execute with any
-/// [`ClientState`]. [`Client::discover`](crate::Client::discover) executes it
-/// and stores the resulting [`Capabilities`] while transitioning to
-/// [`Discovered`](crate::Discovered).
-///
-/// # Observed server handlers
-///
-/// SAP's ADT development diagnostics map this endpoint to:
-///
-/// - `CL_ADT_DISCOVERY_RES_APP->REGISTER_RESOURCES` for registration;
-/// - `CL_ADT_RES_DISCOVERY->GET` for the `GET` implementation.
-///
-/// These ABAP classes are implementation details that can vary by SAP release;
-/// the operation depends only on the HTTP and AtomPub contract.
-#[derive(Debug, Default)]
-pub struct DiscoveryQuery;
-
-impl<S: ClientState> Operation<S> for DiscoveryQuery {
-    type Response = Capabilities;
-    type Kind = Stateless;
-
-    fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
-        let target = AdtUri::parse("/sap/bc/adt/discovery")
-            .expect("the central discovery target is a valid static ADT URI");
-        let mut request = AdtRequest::new(Method::GET, target);
-        request.headers_mut().insert(
-            header::ACCEPT,
-            HeaderValue::from_static(DISCOVERY_MEDIA_TYPE),
-        );
-        Ok(request)
-    }
-
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
-        decode_discovery_response(response)
-    }
-}
-
-fn decode_discovery_response(response: AdtResponse) -> Result<Capabilities, ResponseError> {
-    if response.status() != http::StatusCode::OK {
-        return Err(ResponseError::UnexpectedStatus {
-            status: response.status(),
-            body: String::from_utf8_lossy(response.body()).into_owned(),
-        });
-    }
-
-    parse_capabilities(response.body()).map_err(ResponseError::from)
-}
-
-fn parse_capabilities(body: &[u8]) -> Result<Capabilities, DiscoveryError> {
-    let document: ServiceDocument = serde_xml_rs::from_reader(body)?;
-    Capabilities::try_from(document)
+pub(crate) fn parse_capabilities(body: &[u8]) -> Result<Capabilities, DiscoveryError> {
+    let raw: RawService = serde_xml_rs::from_reader(body)?;
+    Capabilities::try_from(raw)
 }
 
 /// Capabilities advertised by an ADT discovery document.
@@ -276,7 +171,7 @@ impl TemplateLink {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename = "app:service")]
-struct ServiceDocument {
+struct RawService {
     #[serde(rename = "app:workspace", default)]
     workspaces: Vec<RawWorkspace>,
 }
@@ -338,11 +233,11 @@ struct RawTemplateLink {
     media_type: Option<String>,
 }
 
-impl TryFrom<ServiceDocument> for Capabilities {
+impl TryFrom<RawService> for Capabilities {
     type Error = DiscoveryError;
 
-    fn try_from(document: ServiceDocument) -> Result<Self, Self::Error> {
-        let workspaces = document
+    fn try_from(raw: RawService) -> Result<Self, Self::Error> {
+        let workspaces = raw
             .workspaces
             .into_iter()
             .map(|workspace| {
@@ -434,16 +329,16 @@ fn collection_target(href: &str) -> Result<AdtUri, crate::AdtUriError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vocabulary::PROGRAMS;
 
     const DISCOVERY_XML: &[u8] = include_bytes!("../tests/fixtures/discovery.xml");
     const INVALID_DISCOVERY_XML: &[u8] = include_bytes!("../tests/fixtures/invalid-discovery.xml");
-    const PROGRAMS_SCHEME: &str = "http://www.sap.com/adt/categories/programs";
 
     #[test]
     fn parses_discovery_capabilities() {
         let capabilities = parse_capabilities(DISCOVERY_XML).unwrap();
         let collection = capabilities
-            .collection(PROGRAMS_SCHEME, "programs")
+            .collection(PROGRAMS.scheme, PROGRAMS.term)
             .unwrap();
 
         assert_eq!(capabilities.workspaces()[0].title(), "Programme");

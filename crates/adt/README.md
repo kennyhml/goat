@@ -85,6 +85,44 @@ independent context IDs while sharing the client's HTTP security session.
 Call `UserSession::close()` when the workflow finishes. Dropping an instance
 only releases local state and does not notify SAP.
 
+### HTTP security-session resource
+
+SAP also exposes a fixed HTTP security-session resource that was not advertised
+by either discovery document on the tested A4H system:
+
+```text
+GET /sap/bc/adt/core/http/sessions
+Content-Type: application/vnd.sap.adt.core.http.session.v3+xml
+```
+
+Its response contains the current security-context reference, the configured
+inactivity timeout, a current-session logoff link, and a system-information
+link. The security-session relation targets:
+
+```text
+/sap/bc/adt/core/http/sessions/{security_context_reference}
+```
+
+The child resource only implements `DELETE`, but deleting it through the same
+security session is intentionally a no-op. `CL_ADT_RES_HTTP_SESSION->DELETE`
+compares the URI reference with the current request's security context and only
+calls `CL_HTTP_SECURITY_SESSION_ADMIN=>TERMINATE_OLD_OWN_SESSION` when they
+differ. It is therefore an old-session cleanup mechanism invoked from a newer
+security session. The separately advertised `/sap/public/bc/icf/logoff`
+resource logs off the current security session.
+
+The server-side handlers observed on A4H are:
+
+| Role | Handler |
+| --- | --- |
+| Registration | `CL_ADT_RES_HTTP_SESSION_APP->REGISTER_RESOURCES` |
+| Collection GET | `CL_ADT_RES_HTTP_SESSION_COLL->GET` |
+| Old-session DELETE | `CL_ADT_RES_HTTP_SESSION->DELETE` |
+
+This resource manages the HTTP security session represented by
+`SAP_SESSIONID_*`; it is unrelated to `UserSession::close()` and the
+`sap-contextid` ABAP user session.
+
 ## Resource references
 
 Resource references separate validated ADT locations from the operations that
@@ -95,6 +133,8 @@ act on them:
 | `ObjectRef` | A lockable repository object | A validated `AdtUri`, a parsed URI, or a domain reference such as `ProgramRef` |
 | `SourceRef` | One source resource plus its owning object | `ObjectRef::main_source()` or `ObjectRef::source(...)` |
 | `ProgramRef` | A program object resolved through discovery | `Client<Discovered>::program(name)` |
+| `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources advertised by object representations | A fetched resource such as `Program` |
+| `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
 
 Constructing a reference performs no request. For a known object URI:
 
@@ -120,6 +160,64 @@ let _ = lock_operation;
 
 Keeping the owning `ObjectRef` inside `SourceRef` lets the update builder reject
 a `LockHandle` obtained for a different object before any request is sent.
+
+## Program metadata
+
+`ProgramRef::query()` defaults to V3 before V2. Callers can replace that order;
+the first preferred version advertised by central discovery is requested. Both
+wire versions normalize into `Program`, wrapped in the corresponding
+`ProgramResponse::V2` or `ProgramResponse::V3` variant:
+
+```rust,ignore
+use goat_adt::{ObjectVersion, Operation, ProgramMediaVersion};
+
+let reference = client.program("ZDEMO")?;
+let response = reference
+    .query()
+    .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
+    .version(ObjectVersion::WorkingArea)
+    .build()?
+    .execute(&client)
+    .await?;
+println!("media version: {:?}", response.media_version());
+
+let program = response.into_program().expect("the descriptor was modified");
+let source = program.source.query().execute(&client).await?;
+
+assert_eq!(program.package.name, "$TMP");
+assert_eq!(program.syntax_configuration.language.version, "X");
+println!("text elements: {:?}", program.text_elements);
+println!("{}", source.content);
+```
+
+Supplying `.etag(cached_etag)` on the query builder sends `If-None-Match`
+instead of `Cache-Control: no-cache`. A current ETag produces
+`ProgramResponse::NotModified { etag }`; modified descriptors produce the V2 or
+V3 variant. The active A4H backend returns an ETag but no content type or body
+for `304 Not Modified`, so `media_version()` is `None` for that variant.
+
+The optional version is typed as `ObjectVersion` and serializes to `active`,
+`inactive`, `workingArea`, `new`, or `partlyActive`. These values come directly
+from `IF_ADT_URI_QUERY_PARAMETERS`. `CL_SEDI_ADT_RES_SOURCE->GET` reads the
+parameter and `CL_ADT_UTILITY->GET_WB_VERSION` maps it to the Workbench's
+one-character `R3STATE`. Transient requests such as `WorkingArea` can therefore
+produce a returned `Program::version` of `Active` or `Inactive`.
+
+The private Atom parser resolves every advertised link and retains it in
+`Program::links` or the nested `SyntaxLanguage::links`. This preserves unknown
+relations alongside `rel`, media type, title, language, length, query, fragment,
+and SAP ETag metadata. Known relations also produce `SourceRef`,
+`HtmlSourceRef`, `SourceVersionsRef`, `ObjectStructureRef`, `TextElementsRef`,
+enhancement references, `ObjectStateRef`, and `ParserRef`. Bare relative,
+explicit `./`, root-relative, and query-bearing hrefs are resolved against the
+fetched program while their paths remain validated beneath `/sap/bc`.
+`ProgramRef::source()` remains the direct conventional `source/main` reference;
+`Program::source` is the location advertised by SAP.
+
+This conversion was verified against `Z_TEST` on the active A4H backend. V2
+and V3 returned byte-identical XML bodies for that program and distinct,
+correct response media types; a live `ProgramQuery` successfully converted all
+relations listed above.
 
 ## Object editing
 

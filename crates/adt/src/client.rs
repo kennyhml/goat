@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    Capabilities, DiscoveryQuery, Operation, OperationError, ProgramError, ProgramRef, Transport,
-    UserSession,
-};
+use crate::{Capabilities, ProgramError, ProgramRef, Transport, UserSession};
 
 mod private {
     pub trait Sealed {}
@@ -66,15 +63,13 @@ impl Client<Undiscovered> {
         }
     }
 
-    /// Fetches central ADT discovery and returns a client carrying its capabilities.
-    pub async fn discover(self) -> Result<Client<Discovered>, OperationError> {
-        let capabilities = DiscoveryQuery.execute(&self).await?;
-        Ok(Client {
+    pub(crate) fn with_capabilities(self, capabilities: Capabilities) -> Client<Discovered> {
+        Client {
             transport: self.transport,
             state: Discovered {
                 capabilities: Arc::new(capabilities),
             },
-        })
+        }
     }
 }
 

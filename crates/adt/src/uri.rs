@@ -10,29 +10,7 @@ pub const ADT_ROOT: &str = "/sap/bc/adt";
 pub const ADT_RESOURCE_ROOT: &str = "/sap/bc";
 const VALIDATION_ORIGIN: &str = "https://adt.invalid";
 
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum AdtUriError {
-    #[error("ADT resource URI cannot be empty")]
-    Empty,
-
-    #[error("absolute and authority URLs are not valid ADT resource URIs")]
-    Absolute,
-
-    #[error("ADT resource URI contains invalid characters")]
-    InvalidCharacters,
-
-    #[error("ADT resource URI must remain below {ADT_RESOURCE_ROOT}")]
-    OutsideRoot,
-
-    #[error("ADT resource URI cannot contain a query or fragment")]
-    QueryOrFragment,
-
-    #[error(transparent)]
-    Url(#[from] url::ParseError),
-}
-
-/// A validated, root-relative resource URI in SAP's `/sap/bc` namespace.
+/// A validated, root-relative resource URI in the `/sap/bc` namespace.
 ///
 /// Relative values are resolved beneath [`ADT_ROOT`]. Root-relative values can
 /// also address related resources, such as `/sap/bc/esproxy`, advertised by
@@ -79,6 +57,28 @@ impl AdtUri {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum AdtUriError {
+    #[error("ADT resource URI cannot be empty")]
+    Empty,
+
+    #[error("absolute and authority URLs are not valid ADT resource URIs")]
+    Absolute,
+
+    #[error("ADT resource URI contains invalid characters")]
+    InvalidCharacters,
+
+    #[error("ADT resource URI must remain below {ADT_RESOURCE_ROOT}")]
+    OutsideRoot,
+
+    #[error("ADT resource URI cannot contain a query or fragment")]
+    QueryOrFragment,
+
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
 }
 
 impl fmt::Display for AdtUri {

@@ -1,9 +1,283 @@
-use goat_adt::{AccessMode, Client, Operation, ReqwestTransport};
+use goat_adt::{
+    AccessMode, Client, ObjectVersion, Operation, ProgramMediaVersion, ProgramResponse,
+    ReqwestTransport,
+};
 use httpmock::prelude::*;
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
 const LOCK_XML: &str = include_str!("fixtures/object-lock.xml");
+// Captured from live A4H. Its V2 and V3 response bodies were byte-identical.
+const PROGRAM_XML: &str = include_str!("fixtures/program-z-test.xml");
 const SOURCE: &str = "REPORT z_goat_test.\nWRITE / 'updated'.\n";
+
+#[tokio::test]
+async fn program_query_converts_the_live_z_test_v3_descriptor() {
+    let server = MockServer::start_async().await;
+    let discovery = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/discovery")
+                .header("cookie", "sap-usercontext=sap-client=001&sap-language=EN");
+            then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let metadata = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/programs/programs/Z_TEST")
+                .header("accept", "application/vnd.sap.adt.programs.programs.v3+xml")
+                .header("cache-control", "no-cache");
+            then.status(200)
+                .header(
+                    "content-type",
+                    "application/vnd.sap.adt.programs.programs.v3+xml; charset=utf-8",
+                )
+                .header("etag", "202607251959580008")
+                .body(PROGRAM_XML);
+        })
+        .await;
+    let get_source = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/programs/programs/Z_TEST/source/main")
+                .header("accept", "text/plain");
+            then.status(200).body(SOURCE);
+        })
+        .await;
+    let transport = ReqwestTransport::builder()
+        .destination(server.base_url())
+        .sap_client("001")
+        .language("EN")
+        .basic_auth("USER", "PASSWORD")
+        .build()
+        .unwrap();
+
+    let client = Client::new(transport).discover().await.unwrap();
+    let reference = client.program("Z_TEST").unwrap();
+    let response = reference
+        .query()
+        .build()
+        .unwrap()
+        .execute(&client)
+        .await
+        .unwrap();
+    assert_eq!(response.media_version(), Some(ProgramMediaVersion::V3));
+    let program = response.into_program().unwrap();
+    let source = program.source.query().execute(&client).await.unwrap();
+
+    assert_eq!(program.reference, reference);
+    assert_eq!(program.name, "Z_TEST");
+    assert_eq!(program.object_type, "PROG/P");
+    assert_eq!(program.version, ObjectVersion::Inactive);
+    assert_eq!(program.program_type, "executableProgram");
+    assert!(program.fix_point_arithmetic);
+    assert!(program.unicode_check_active);
+    assert_eq!(program.package.name, "$TMP");
+    assert_eq!(program.package.object_type, "DEVC/K");
+    assert_eq!(
+        program.package.object.uri().as_str(),
+        "/sap/bc/adt/packages/%24tmp"
+    );
+    assert_eq!(program.syntax_configuration.language.version, "X");
+    assert_eq!(
+        program.syntax_configuration.language.description,
+        "Standard ABAP"
+    );
+    assert_eq!(program.links.len(), 9);
+    let text_elements_link = program
+        .links
+        .iter()
+        .find(|link| {
+            link.relation.as_deref()
+                == Some("http://www.sap.com/adt/relations/sources/textelements")
+        })
+        .unwrap();
+    assert_eq!(text_elements_link.title.as_deref(), Some("Text Elements"));
+    assert_eq!(
+        text_elements_link.target.as_str(),
+        "/sap/bc/adt/textelements/programs/z_test"
+    );
+    let parser_link = &program.syntax_configuration.language.links[0];
+    assert_eq!(
+        parser_link.relation.as_deref(),
+        Some("http://www.sap.com/adt/relations/abapsource/parser")
+    );
+    assert_eq!(parser_link.media_type.as_deref(), Some("text/plain"));
+    assert_eq!(parser_link.title.as_deref(), Some("Standard ABAP"));
+    assert_eq!(parser_link.etag.as_deref(), Some("757"));
+    assert_eq!(
+        program.source.uri.as_str(),
+        "/sap/bc/adt/programs/programs/Z_TEST/source/main"
+    );
+    assert!(program.source.query.is_empty());
+    assert_eq!(program.source.etag.as_deref(), Some("202607251959580001"));
+    assert_eq!(program.etag.as_deref(), Some("202607251959580008"));
+    assert_eq!(
+        program.html_source.as_ref().unwrap().uri,
+        program.source.uri
+    );
+    assert_eq!(
+        program.versions.as_ref().unwrap().uri.as_str(),
+        "/sap/bc/adt/programs/programs/Z_TEST/source/main/versions"
+    );
+    assert_eq!(
+        program.object_structure.as_ref().unwrap().uri.as_str(),
+        "/sap/bc/adt/programs/programs/z_test/objectstructure"
+    );
+    assert_eq!(
+        program.text_elements.as_ref().unwrap().uri.as_str(),
+        "/sap/bc/adt/textelements/programs/z_test"
+    );
+    assert_eq!(
+        program
+            .enhancement_implementations
+            .as_ref()
+            .unwrap()
+            .uri
+            .as_str(),
+        "/sap/bc/adt/programs/programs/z_test/enhancements/implementations"
+    );
+    assert_eq!(
+        program.enhancement_options.as_ref().unwrap().uri.as_str(),
+        "/sap/bc/adt/programs/programs/z_test/enhancements/options"
+    );
+    assert_eq!(
+        program
+            .source_enhancement_options
+            .as_ref()
+            .unwrap()
+            .uri
+            .as_str(),
+        "/sap/bc/adt/programs/programs/z_test/source/main/enhancements/options"
+    );
+    assert_eq!(
+        program.object_state.as_ref().unwrap().query,
+        [("version".to_owned(), "active".to_owned())]
+    );
+    assert_eq!(
+        program
+            .syntax_configuration
+            .language
+            .parser
+            .as_ref()
+            .unwrap()
+            .uri
+            .as_str(),
+        "/sap/bc/adt/abapsource/parsers/rnd/grammar"
+    );
+    assert_eq!(source.content, SOURCE);
+
+    discovery.assert_async().await;
+    metadata.assert_async().await;
+    get_source.assert_async().await;
+}
+
+#[tokio::test]
+async fn program_query_honors_v2_first_priority() {
+    let server = MockServer::start_async().await;
+    let discovery = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/discovery");
+            then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let metadata = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/programs/programs/Z_TEST")
+                .query_param("version", "workingArea")
+                .header("accept", "application/vnd.sap.adt.programs.programs.v2+xml");
+            then.status(200)
+                .header(
+                    "content-type",
+                    "application/vnd.sap.adt.programs.programs.v2+xml; charset=utf-8",
+                )
+                .header("etag", "202607251959580008")
+                .body(PROGRAM_XML);
+        })
+        .await;
+    let transport = ReqwestTransport::builder()
+        .destination(server.base_url())
+        .sap_client("001")
+        .language("EN")
+        .basic_auth("USER", "PASSWORD")
+        .build()
+        .unwrap();
+
+    let client = Client::new(transport).discover().await.unwrap();
+    let response = client
+        .program("Z_TEST")
+        .unwrap()
+        .query()
+        .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
+        .version(ObjectVersion::WorkingArea)
+        .build()
+        .unwrap()
+        .execute(&client)
+        .await
+        .unwrap();
+    assert_eq!(response.media_version(), Some(ProgramMediaVersion::V2));
+    let program = response.into_program().unwrap();
+
+    assert_eq!(program.name, "Z_TEST");
+    assert_eq!(program.version, ObjectVersion::Inactive);
+    assert_eq!(program.source.etag.as_deref(), Some("202607251959580001"));
+    discovery.assert_async().await;
+    metadata.assert_async().await;
+}
+
+#[tokio::test]
+async fn program_query_returns_not_modified_for_a_current_etag() {
+    let server = MockServer::start_async().await;
+    let discovery = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/discovery");
+            then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let metadata = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/programs/programs/Z_TEST")
+                .query_param("version", "inactive")
+                .header("accept", "application/vnd.sap.adt.programs.programs.v3+xml")
+                .header("if-none-match", "202607251959580008");
+            then.status(304).header("etag", "202607251959580008");
+        })
+        .await;
+    let transport = ReqwestTransport::builder()
+        .destination(server.base_url())
+        .sap_client("001")
+        .language("EN")
+        .basic_auth("USER", "PASSWORD")
+        .build()
+        .unwrap();
+
+    let client = Client::new(transport).discover().await.unwrap();
+    let response = client
+        .program("Z_TEST")
+        .unwrap()
+        .query()
+        .etag("202607251959580008")
+        .version(ObjectVersion::Inactive)
+        .build()
+        .unwrap()
+        .execute(&client)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        response,
+        ProgramResponse::NotModified {
+            etag: Some(ref etag)
+        } if etag == "202607251959580008"
+    ));
+    assert_eq!(response.media_version(), None);
+    assert_eq!(response.etag(), Some("202607251959580008"));
+    assert!(response.as_program().is_none());
+    discovery.assert_async().await;
+    metadata.assert_async().await;
+}
 
 #[tokio::test]
 async fn program_lock_and_update_share_one_user_session() {
@@ -21,6 +295,7 @@ async fn program_lock_and_update_share_one_user_session() {
             when.method(GET)
                 .path("/sap/bc/adt/core/discovery")
                 .header("x-csrf-token", "Fetch")
+                .header("x-sap-adt-sessiontype", "stateless")
                 .header("cookie", "sap-usercontext=sap-client=001&sap-language=EN");
             then.status(200).header("x-csrf-token", "CSRF-TOKEN-1");
         })
