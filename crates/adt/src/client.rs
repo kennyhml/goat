@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{Capabilities, ProgramError, ProgramRef, Transport, UserSession};
+use crate::{Capabilities, FromDiscovery, Transport, UserSession};
 
 mod private {
     pub trait Sealed {}
@@ -79,14 +79,22 @@ impl Client<Discovered> {
         &self.state.capabilities
     }
 
-    /// Resolves a program reference from the discovered programs collection.
+    /// Resolves a typed object reference from central discovery.
     ///
-    /// The program name is encoded as a single path segment, so namespaced
-    /// names such as `/DMO/PROGRAM` are supported. See [`ProgramRef`] for an
-    /// example and for the relationship between its object and source
-    /// references.
-    pub fn program(&self, name: impl Into<String>) -> Result<ProgramRef, ProgramError> {
-        ProgramRef::resolve(self.capabilities(), name)
+    /// `T` identifies the collection category and interprets that collections
+    /// member convention. Resolving a reference performs does not perform I/O,
+    /// it is simply resolved against the dicovered collections
+    ///
+    /// ```rust,ignore
+    /// use goat_adt::ProgramRef;
+    ///
+    /// let program = client.object::<ProgramRef>("ZDEMO")?;
+    /// ```
+    pub fn object<T>(&self, name: &str) -> Result<T, T::Error>
+    where
+        T: FromDiscovery,
+    {
+        T::from_discovery(self.capabilities(), name)
     }
 }
 

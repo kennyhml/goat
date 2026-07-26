@@ -1,5 +1,7 @@
+#![cfg(feature = "reqwest")]
+
 use goat_adt::{
-    AccessMode, Client, ObjectVersion, Operation, ProgramMediaVersion, ProgramResponse,
+    AccessMode, Client, ObjectVersion, Operation, ProgramMediaVersion, ProgramRef, ProgramResponse,
     ReqwestTransport,
 };
 use httpmock::prelude::*;
@@ -53,7 +55,7 @@ async fn program_query_converts_the_live_z_test_v3_descriptor() {
         .unwrap();
 
     let client = Client::new(transport).discover().await.unwrap();
-    let reference = client.program("Z_TEST").unwrap();
+    let reference = client.object::<ProgramRef>("Z_TEST").unwrap();
     let response = reference
         .query()
         .build()
@@ -206,7 +208,7 @@ async fn program_query_honors_v2_first_priority() {
 
     let client = Client::new(transport).discover().await.unwrap();
     let response = client
-        .program("Z_TEST")
+        .object::<ProgramRef>("Z_TEST")
         .unwrap()
         .query()
         .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
@@ -255,7 +257,7 @@ async fn program_query_returns_not_modified_for_a_current_etag() {
 
     let client = Client::new(transport).discover().await.unwrap();
     let response = client
-        .program("Z_TEST")
+        .object::<ProgramRef>("Z_TEST")
         .unwrap()
         .query()
         .etag("202607251959580008")
@@ -383,7 +385,7 @@ async fn program_lock_and_update_share_one_user_session() {
         .unwrap();
 
     let client = Client::new(transport).discover().await.unwrap();
-    let program = client.program("Z_GOAT_TEST").unwrap();
+    let program = client.object::<ProgramRef>("Z_GOAT_TEST").unwrap();
     let source = program.source().query().execute(&client).await.unwrap();
     let session = client.create_user_session();
 

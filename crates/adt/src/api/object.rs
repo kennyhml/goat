@@ -2,7 +2,7 @@ use derive_builder::Builder;
 use http::{HeaderValue, Method, StatusCode, header};
 
 use crate::{
-    client::{Client, Discovered},
+    client::{Client, ClientState},
     error::{ObjectError, OperationError, ResponseError},
     object::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
     operation::{Operation, Stateful, Stateless},
@@ -19,11 +19,11 @@ pub struct ObjectSourceQuery {
     pub source: SourceRef,
 }
 
-impl Operation<Discovered> for ObjectSourceQuery {
+impl<S: ClientState> Operation<S> for ObjectSourceQuery {
     type Response = SourceCode;
     type Kind = Stateless;
 
-    fn request(&self, _client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
+    fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
         let mut request = AdtRequest::new(Method::GET, self.source.uri.clone());
         for (name, value) in &self.source.query {
             request.push_query(name, value);
@@ -73,11 +73,11 @@ pub struct ObjectLock {
     pub access_mode: AccessMode,
 }
 
-impl Operation<Discovered> for ObjectLock {
+impl<S: ClientState> Operation<S> for ObjectLock {
     type Response = LockHandle;
     type Kind = Stateful;
 
-    fn request(&self, _client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
+    fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
         let mut request = AdtRequest::new(Method::POST, self.object.uri().clone());
         request.push_query(query_parameter::ACTION, PostAction::Lock.as_str());
         request.push_query(query_parameter::ACCESS_MODE, self.access_mode.as_str());
@@ -104,11 +104,11 @@ pub struct ObjectUnlock {
     pub lock_handle: LockHandle,
 }
 
-impl Operation<Discovered> for ObjectUnlock {
+impl<S: ClientState> Operation<S> for ObjectUnlock {
     type Response = ();
     type Kind = Stateful;
 
-    fn request(&self, _client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
+    fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
         let mut request = AdtRequest::new(Method::POST, self.lock_handle.object.uri().clone());
         request.push_query(query_parameter::ACTION, PostAction::Unlock.as_str());
         request.push_query(query_parameter::LOCK_HANDLE, &self.lock_handle.handle);
@@ -153,11 +153,11 @@ impl ObjectSourceUpdateBuilder {
     }
 }
 
-impl Operation<Discovered> for ObjectSourceUpdate {
+impl<S: ClientState> Operation<S> for ObjectSourceUpdate {
     type Response = ();
     type Kind = Stateful;
 
-    fn request(&self, _client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
+    fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
         let mut request = AdtRequest::new(Method::PUT, self.source.uri.clone());
         for (name, value) in &self.source.query {
             request.push_query(name, value);
@@ -186,36 +186,24 @@ impl LockHandle {
 // It is incovenient for consumers to always construct operations from scratch, so we
 // can implement them for the reference types they typically already deal with.
 
-impl ObjectRef {
-    /// Creates an operation that locks this object with the requested access.
+impl ProgramRef {
+    /// Creates an object-lock operation for this program.
     pub fn lock(&self, access_mode: AccessMode) -> ObjectLock {
         ObjectLock {
-            object: self.clone(),
+            object: self.object().clone(),
             access_mode,
         }
     }
 
-    /// Creates an operation that releases a lock obtained for this object.
+    /// Creates an operation that releases this program's object lock.
     pub fn unlock(&self, lock_handle: LockHandle) -> Result<ObjectUnlock, ObjectError> {
-        if self != &lock_handle.object {
+        if self.object() != &lock_handle.object {
             return Err(ObjectError::LockHandleObjectMismatch {
                 expected: self.to_string(),
                 actual: lock_handle.object.to_string(),
             });
         }
         Ok(ObjectUnlock { lock_handle })
-    }
-}
-
-impl ProgramRef {
-    /// Creates a generic object-lock operation for this program.
-    pub fn lock(&self, access_mode: AccessMode) -> ObjectLock {
-        self.object().lock(access_mode)
-    }
-
-    /// Creates an operation that releases this program's object lock.
-    pub fn unlock(&self, lock_handle: LockHandle) -> Result<ObjectUnlock, ObjectError> {
-        self.object().unlock(lock_handle)
     }
 }
 
@@ -251,13 +239,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn object_operations_do_not_require_discovery() {
+        fn accepts_undiscovered<O: Operation<crate::Undiscovered>>() {}
+
+        accepts_undiscovered::<ObjectSourceQuery>();
+        accepts_undiscovered::<ObjectLock>();
+        accepts_undiscovered::<ObjectUnlock>();
+        accepts_undiscovered::<ObjectSourceUpdate>();
+    }
+
+    #[test]
     fn update_builder_rejects_a_lock_for_another_object() {
-        let first = ObjectRef::parse("/sap/bc/adt/programs/programs/ZFIRST").unwrap();
-        let second = ObjectRef::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap();
-        let lock_handle = LockHandle::new(first, "LOCK-HANDLE".to_owned());
+        let first = ProgramRef::for_test(
+            crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZFIRST").unwrap(),
+        );
+        let second = ProgramRef::for_test(
+            crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap(),
+        );
+        let lock_handle = LockHandle::new(first.object().clone(), "LOCK-HANDLE".to_owned());
 
         let error = second
-            .main_source()
+            .source()
             .update()
             .lock_handle(lock_handle)
             .content("REPORT zsecond.")
@@ -269,9 +271,13 @@ mod tests {
 
     #[test]
     fn object_rejects_another_objects_lock_for_unlock() {
-        let first = ObjectRef::parse("/sap/bc/adt/programs/programs/ZFIRST").unwrap();
-        let second = ObjectRef::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap();
-        let lock_handle = LockHandle::new(first, "LOCK-HANDLE".to_owned());
+        let first = ProgramRef::for_test(
+            crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZFIRST").unwrap(),
+        );
+        let second = ProgramRef::for_test(
+            crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap(),
+        );
+        let lock_handle = LockHandle::new(first.object().clone(), "LOCK-HANDLE".to_owned());
 
         let error = second.unlock(lock_handle).unwrap_err();
 

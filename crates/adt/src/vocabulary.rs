@@ -1,7 +1,10 @@
 /// A stable category identity from an ADT discovery document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CategoryId {
+pub struct CategoryId {
+    /// The category scheme URI.
     pub scheme: &'static str,
+
+    /// The category term within the scheme.
     pub term: &'static str,
 }
 

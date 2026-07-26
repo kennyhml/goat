@@ -14,7 +14,8 @@ use crate::{
 /// The SAP media-type version used to decode a program descriptor.
 ///
 /// `ProgramQuery` defaults to V3 before V2, and callers can supply a different
-/// priority. Both representations are normalized into [`Program`].
+/// preference. Both representations are normalized into [`Program`], because
+/// there seems to be no difference between V2 and V3.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ProgramMediaVersion {
     V2,
@@ -116,10 +117,6 @@ pub struct ProgramQuery {
     pub version: Option<ObjectVersion>,
 }
 
-fn default_program_media_priority() -> Vec<ProgramMediaVersion> {
-    vec![ProgramMediaVersion::V3, ProgramMediaVersion::V2]
-}
-
 impl Operation<Discovered> for ProgramQuery {
     type Response = ProgramResponse;
     type Kind = Stateless;
@@ -187,7 +184,20 @@ impl Operation<Discovered> for ProgramQuery {
 }
 
 impl ProgramRef {
-    /// Creates a builder for an operation that fetches this program's metadata.
+    /// Creates a builder for an operation that fetches this programs metadata.
+    ///
+    /// That way, it becomes possible to just call
+    /// ```rust,ignore
+    /// program.query().etag(etag).execute(&client).await?
+    /// ```
+    /// instead of constructing an operation from scratch:
+    /// ```rust
+    /// ProgramQueryBuilder::default()
+    ///     .program(program)
+    ///     .etag(etag)
+    ///     .execute(&client)
+    ///     .await?
+    /// ```
     pub fn query(&self) -> ProgramQueryBuilder {
         let mut builder = ProgramQueryBuilder::default();
         builder.program(self.clone());
@@ -195,6 +205,12 @@ impl ProgramRef {
     }
 }
 
+// TODO: Probably better to handle inside the execution
+fn default_program_media_priority() -> Vec<ProgramMediaVersion> {
+    vec![ProgramMediaVersion::V3, ProgramMediaVersion::V2]
+}
+
+// TODO: Move this to common utils or even into AdtResponse
 fn response_etag(response: &AdtResponse) -> Option<String> {
     response
         .headers()
@@ -203,6 +219,10 @@ fn response_etag(response: &AdtResponse) -> Option<String> {
         .map(str::to_owned)
 }
 
+// TODO: Negotiate woud be the more accurate term and this is a basic
+// operation we should also have some generic helper for, parse both
+// sides into one representation and then have them implement PartialOrd
+// or something
 fn preferred_representation(
     client: &Client<Discovered>,
     priority: &[ProgramMediaVersion],

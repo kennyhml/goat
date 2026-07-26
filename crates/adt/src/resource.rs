@@ -2,7 +2,7 @@ use std::fmt;
 
 use url::Url;
 
-use crate::{AdtUri, AdtUriError, Capabilities, ProgramError, vocabulary::PROGRAMS};
+use crate::{AdtUri, AdtUriError, Capabilities, CategoryId, ProgramError, vocabulary::PROGRAMS};
 const LINK_RESOLUTION_ORIGIN: &str = "https://adt.invalid";
 
 /// A concrete link advertised by an ADT resource representation.
@@ -263,12 +263,9 @@ relation_ref!(
 /// A validated reference to an ADT repository object.
 ///
 /// An object reference is an identity and resource location, not a fetched
-/// object representation. It can refer to any lockable ADT object, including a
-/// program, class, CDS source, or DDIC structure. Constructing one performs no
-/// I/O.
-///
-/// From an object reference, callers can derive source resources and generic
-/// operations without rebuilding URI strings:
+/// object representation or proof of protocol capabilities. In particular, it
+/// does not imply that the object has source code or supports locking.
+/// Constructing one performs no I/O.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ObjectRef(AdtUri);
 
@@ -286,33 +283,6 @@ impl ObjectRef {
     /// Returns the object's resource URI.
     pub fn uri(&self) -> &AdtUri {
         &self.0
-    }
-
-    /// Creates a source reference below this object using relative path segments.
-    ///
-    /// Use this for nonstandard source resources, such as class test sources.
-    /// Dynamic segments are encoded as individual URI path segments.
-    pub fn source<I, T>(&self, segments: I) -> Result<SourceRef, AdtUriError>
-    where
-        I: IntoIterator<Item = T>,
-        T: AsRef<str>,
-    {
-        append_segments(self.uri(), segments).map(|uri| SourceRef {
-            object: self.clone(),
-            uri,
-            query: Vec::new(),
-            fragment: None,
-            etag: None,
-        })
-    }
-
-    /// Returns this object's conventional `source/main` resource.
-    ///
-    /// The returned [`SourceRef`] remembers this object so an update builder can
-    /// reject a lock obtained for a different object.
-    pub fn main_source(&self) -> SourceRef {
-        self.source(["source", "main"])
-            .expect("static source path segments form a valid ADT URI")
     }
 }
 
@@ -383,13 +353,27 @@ impl fmt::Display for SourceRef {
     }
 }
 
+/// Constructs a typed reference from central-discovery capabilities.
+///
+/// Implementations identify their collection through [`FromDiscovery::CATEGORY`]
+/// and apply the domain-specific rules for resolving a named member. The
+/// conversion performs no request.
+pub trait FromDiscovery: Sized {
+    /// The error produced while resolving this reference.
+    type Error;
+
+    /// The stable discovery category identifying the reference's collection.
+    const CATEGORY: CategoryId;
+
+    /// Resolves `name` using the supplied central-discovery capabilities.
+    fn from_discovery(capabilities: &Capabilities, name: &str) -> Result<Self, Self::Error>;
+}
+
 /// A program identity resolved from the programs collection in central discovery.
 ///
-/// Unlike [`ObjectRef::parse`], [`Client::program`](crate::Client::program) does
-/// not require callers to know the programs collection URI. It looks up the
-/// stable programs category in the client's discovered capabilities, appends
-/// the program name as one encoded path segment, and returns a reference that
-/// exposes both the program object and its main source.
+/// [`Client::object`](crate::Client::object) does not require callers to know the
+/// programs collection URI. It looks up the stable programs category and
+/// appends the program name as one encoded path segment.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ProgramRef(ObjectRef);
 
@@ -397,19 +381,6 @@ impl ProgramRef {
     #[cfg(test)]
     pub(crate) fn for_test(uri: AdtUri) -> Self {
         Self(ObjectRef::new(uri))
-    }
-
-    pub(crate) fn resolve(
-        capabilities: &Capabilities,
-        program_name: impl Into<String>,
-    ) -> Result<Self, ProgramError> {
-        let program_name = program_name.into();
-        validate_program_name(&program_name)?;
-        let collection = capabilities
-            .collection(PROGRAMS.scheme, PROGRAMS.term)
-            .ok_or(ProgramError::MissingCollection)?;
-        let uri = append_segments(collection.target(), [&program_name])?;
-        Ok(Self(ObjectRef::new(uri)))
     }
 
     /// Returns the program object reference.
@@ -422,9 +393,45 @@ impl ProgramRef {
         self.0.uri()
     }
 
-    /// Returns the program's main source resource.
+    /// Returns the program's conventional `source/main` resource.
+    ///
+    /// This convention belongs to the ADT program resource profile; it is not
+    /// implied by the underlying [`ObjectRef`]. A fetched [`Program`](crate::Program)
+    /// instead exposes the source link advertised by SAP.
     pub fn source(&self) -> SourceRef {
-        self.0.main_source()
+        let uri = append_segments(self.uri(), ["source", "main"])
+            .expect("static program source path segments form a valid ADT URI");
+        SourceRef {
+            object: self.0.clone(),
+            uri,
+            query: Vec::new(),
+            fragment: None,
+            etag: None,
+        }
+    }
+}
+
+impl fmt::Display for ProgramRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromDiscovery for ProgramRef {
+    type Error = ProgramError;
+
+    const CATEGORY: CategoryId = PROGRAMS;
+
+    fn from_discovery(
+        capabilities: &Capabilities,
+        program_name: &str,
+    ) -> Result<Self, Self::Error> {
+        validate_program_name(program_name)?;
+        let collection = capabilities
+            .collection(Self::CATEGORY.scheme, Self::CATEGORY.term)
+            .ok_or(ProgramError::MissingCollection)?;
+        let uri = append_segments(collection.target(), [program_name])?;
+        Ok(Self(ObjectRef::new(uri)))
     }
 }
 
@@ -475,12 +482,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn derives_source_resources_from_validated_objects() {
-        let object = ObjectRef::parse("/sap/bc/adt/ddic/structures/ZSTRUCTURE").unwrap();
+    fn derives_the_conventional_source_from_a_program_reference() {
+        let program =
+            ProgramRef::for_test(AdtUri::parse("/sap/bc/adt/programs/programs/ZPROGRAM").unwrap());
 
         assert_eq!(
-            object.main_source().uri.as_str(),
-            "/sap/bc/adt/ddic/structures/ZSTRUCTURE/source/main"
+            program.source().uri.as_str(),
+            "/sap/bc/adt/programs/programs/ZPROGRAM/source/main"
         );
     }
 

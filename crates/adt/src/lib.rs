@@ -35,12 +35,12 @@ pub use operation::{Executor, Operation, OperationKind, Stateful, Stateless, Use
 pub use program::{Program, SyntaxConfiguration, SyntaxLanguage};
 pub use protocol::{AdtRequest, AdtResponse};
 pub use resource::{
-    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, HtmlSourceRef, ObjectRef,
-    ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, ProgramRef,
-    SourceRef, SourceVersionsRef, TextElementsRef,
+    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, FromDiscovery, HtmlSourceRef,
+    ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef, ParserRef,
+    ProgramRef, SourceRef, SourceVersionsRef, TextElementsRef,
 };
 pub use transport::Transport;
 #[cfg(feature = "reqwest")]
 pub use transport::{ReqwestTransport, ReqwestTransportBuilder};
 pub use uri::{ADT_RESOURCE_ROOT, ADT_ROOT, AdtUri, AdtUriError};
-pub use vocabulary::PostAction;
+pub use vocabulary::{CategoryId, PostAction};

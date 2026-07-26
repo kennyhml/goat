@@ -1,3 +1,5 @@
+#![cfg(feature = "reqwest")]
+
 use async_trait::async_trait;
 use goat_adt::{
     AdtRequest, AdtResponse, Client, CoreDiscoveryQuery, DiscoveryError, DiscoveryQuery, Operation,

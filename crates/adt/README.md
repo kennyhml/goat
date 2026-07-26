@@ -126,40 +126,45 @@ This resource manages the HTTP security session represented by
 ## Resource references
 
 Resource references separate validated ADT locations from the operations that
-act on them:
+act on them. A bare `ObjectRef` does not imply source, locking, update, or
+execution capabilities:
 
 | Type | Represents | Created from |
 | --- | --- | --- |
-| `ObjectRef` | A lockable repository object | A validated `AdtUri`, a parsed URI, or a domain reference such as `ProgramRef` |
-| `SourceRef` | One source resource plus its owning object | `ObjectRef::main_source()` or `ObjectRef::source(...)` |
-| `ProgramRef` | A program object resolved through discovery | `Client<Discovered>::program(name)` |
+| `ObjectRef` | A repository-object identity and location, without implied capabilities | A validated `AdtUri`, a parsed URI, or a domain reference such as `ProgramRef` |
+| `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable domain reference such as `ProgramRef` |
+| `ProgramRef` | A program object resolved through discovery | `Client<Discovered>::object::<ProgramRef>(name)` |
 | `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources advertised by object representations | A fetched resource such as `Program` |
 | `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
+
+Named domain references implement `FromDiscovery`, allowing a discovered
+client to resolve them without a type-specific client method:
+
+```rust,ignore
+let program = client.object::<ProgramRef>("ZDEMO")?;
+```
 
 Constructing a reference performs no request. For a known object URI:
 
 ```rust
-use goat_adt::{AccessMode, ObjectRef};
+use goat_adt::ObjectRef;
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
 let structure = ObjectRef::parse(
     "/sap/bc/adt/ddic/structures/ZSTRUCTURE",
 )?;
-let source = structure.main_source();
-let lock_operation = structure.lock(AccessMode::Modify);
 
-assert_eq!(&source.object, &structure);
 assert_eq!(
-    source.uri.as_str(),
-    "/sap/bc/adt/ddic/structures/ZSTRUCTURE/source/main",
+    structure.uri().as_str(),
+    "/sap/bc/adt/ddic/structures/ZSTRUCTURE",
 );
-let _ = lock_operation;
 # Ok(())
 # }
 ```
 
-Keeping the owning `ObjectRef` inside `SourceRef` lets the update builder reject
-a `LockHandle` obtained for a different object before any request is sent.
+Domain references expose only the conventions established for that resource
+type. Keeping the owning `ObjectRef` inside `SourceRef` lets the update builder
+reject a `LockHandle` obtained for a different object before any request is sent.
 
 ## Program metadata
 
@@ -169,9 +174,9 @@ wire versions normalize into `Program`, wrapped in the corresponding
 `ProgramResponse::V2` or `ProgramResponse::V3` variant:
 
 ```rust,ignore
-use goat_adt::{ObjectVersion, Operation, ProgramMediaVersion};
+use goat_adt::{ObjectVersion, Operation, ProgramMediaVersion, ProgramRef};
 
-let reference = client.program("ZDEMO")?;
+let reference = client.object::<ProgramRef>("ZDEMO")?;
 let response = reference
     .query()
     .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
@@ -225,10 +230,10 @@ Object locking and source updates are generic stateful operations. A
 `ProgramRef` resolves its object and source resources from central discovery:
 
 ```rust,ignore
-use goat_adt::{AccessMode, Operation};
+use goat_adt::{AccessMode, Operation, ProgramRef};
 
 let session = client.create_user_session();
-let program = client.program("ZDEMO")?;
+let program = client.object::<ProgramRef>("ZDEMO")?;
 let lock_handle = program
     .lock(AccessMode::Modify)
     .execute(&session)
@@ -250,18 +255,15 @@ session.close().await?;
 When the owning resource is not otherwise needed, the equivalent lock-owned
 form is `lock_handle.remove().execute(&session).await?`.
 
-`ObjectRef::lock()` constructs an `ObjectLock` operation, while
+`ProgramRef::lock()` constructs an `ObjectLock` operation, while
 `SourceRef::update()` seeds an `ObjectSourceUpdateBuilder` with its validated
 source. `ObjectLock` parses SAP's opaque `LOCK_HANDLE` into a `LockHandle`; the
-update builder rejects a handle obtained for another object.
-The same operations can therefore edit programs, classes, DDIC structures, CDS
-sources, and other source-backed repository objects without duplicating their
-stateful protocol.
+update builder rejects a handle obtained for another object. Future domain
+references can expose the same protocol operations when their ADT resource
+profiles establish the corresponding capabilities.
 
 The `UserSession` serializes both calls and carries the `sap-contextid` returned
-by the lock response into the update request. For example, a structure can use
-`ObjectRef::parse("/sap/bc/adt/ddic/structures/ZSTRUCTURE")?` and its
-`main_source()` with the same lock and update builders.
+by the lock response into the update request.
 
 The active development-handler diagnostics map both operations to
 `CL_SEDI_ADT_RES_PROGRAM`: method `POST` handles the lock and method `PUT`
