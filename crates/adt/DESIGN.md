@@ -2,29 +2,28 @@
 
 ## Generic Properties Queries
 
-Program and include properties currently use the same request and response
-algorithm. Before adding class properties, consolidate that algorithm into a
-generic query kernel while preserving domain-specific public names.
+Program and include properties use the same generic request and response kernel
+while retaining domain-specific public names.
 
-Proposed shape:
+Current shape:
 
 ```rust
-pub struct ObjectPropertiesQuery<R, M = Unconditional>
+pub struct ObjectPropertiesQuery<T, M = Unconditional>
 where
-    R: ObjectProperties,
+    T: ObjectProperties,
 {
-    resource: R,
-    priority: Vec<R::MediaVersion>,
+    resource: ObjectRef<T>,
+    priority: Vec<T::MediaVersion>,
     version: Option<ObjectVersion>,
     mode: M,
 }
 
 pub type ProgramPropertiesQuery<M = Unconditional> =
-    ObjectPropertiesQuery<ProgramRef, M>;
+    ObjectPropertiesQuery<Program, M>;
 pub type IncludePropertiesQuery<M = Unconditional> =
-    ObjectPropertiesQuery<IncludeRef, M>;
+    ObjectPropertiesQuery<Include, M>;
 pub type ClassPropertiesQuery<M = Unconditional> =
-    ObjectPropertiesQuery<ClassRef, M>;
+    ObjectPropertiesQuery<Class, M>;
 ```
 
 The generic layer should own:
@@ -36,15 +35,14 @@ The generic layer should own:
 - `QueryMode`, `Conditional<T>`, and `200`/`304` handling.
 - HTTP ETag extraction.
 
-Each sealed resource profile should provide:
+Each sealed object-type profile should provide:
 
-- Its typed reference and resource URI.
 - Its discovery `CategoryId`.
 - Its associated media-version and representation types.
 - Its domain error conversion.
 
-The version-tagged representation implements
-`TryFrom<RawObjectProperties<Reference>>` in the models layer. That conversion
+Each version-tagged representation implements `TryFrom<RawObjectProperties<T>>`
+for its object-type marker in the models layer. That conversion
 owns XML parsing and semantic validation. The generic query handles missing or
 unsupported response `Content-Type` values before handing the owned body to the
 model conversion.
@@ -76,8 +74,9 @@ application/vnd.sap.adt.oo.classes.v2+xml
 application/vnd.sap.adt.oo.classes+xml
 ```
 
-Class-specific types should include `ClassRef`, `ClassMediaVersion`,
-`ClassProperties`, `ClassPropertiesRepresentation`, and `ClassError`.
+Class-specific types should include `Class`, the `ClassRef = ObjectRef<Class>`
+alias, `ClassMediaVersion`, `ClassProperties`, `ClassPropertiesRepresentation`,
+and `ClassError`.
 
 Class source and class execution are separate contracts:
 

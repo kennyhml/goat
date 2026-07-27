@@ -1,20 +1,14 @@
 use std::collections::HashMap;
 
 use crate::{
-    AdtUri, AdtUriError, CompatibilityError, ObjectProperties,
-    api::properties::ObjectPropertiesQuery,
+    AdtUri, AdtUriError, CompatibilityError,
     client::{Client, Discovered},
-    error::{IncludeError, OperationError, ProgramError, ResponseError},
-    models::{
-        IncludeMediaVersion, IncludeProperties, ProgramMediaVersion, ProgramProperties,
-        ProgramRunOutput,
-    },
+    error::{OperationError, ProgramError, ResponseError},
+    models::ProgramRunOutput,
+    objects::{Include, ObjectPropertiesQuery, ObjectRef, Program, ProgramRef},
     operation::{Operation, Stateless, Unconditional},
     protocol::{AdtRequest, AdtResponse},
-    resource::{IncludeRef, ProgramRef},
-    vocabulary::{
-        INCLUDES, PROGRAM_RUN, PROGRAM_RUN_RELATION, PROGRAMS, media_type, query_parameter,
-    },
+    vocabulary::{PROGRAM_RUN, PROGRAM_RUN_RELATION, media_type, query_parameter},
 };
 use derive_builder::Builder;
 use http::Method;
@@ -24,7 +18,7 @@ use url::Url;
 const PROGRAM_NAME_VARIABLE: &str = "programname";
 
 /// Fetches program properties using the generic object-properties protocol.
-pub type ProgramPropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<ProgramRef, M>;
+pub type ProgramPropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<Program, M>;
 
 /// Runs an executable ABAP program and returns its rendered console output.
 ///
@@ -85,54 +79,14 @@ impl Operation<Discovered> for ProgramRun {
 }
 
 /// Fetches include properties using the generic object-properties protocol.
-pub type IncludePropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<IncludeRef, M>;
+pub type IncludePropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<Include, M>;
 
-impl ProgramRef {
-    /// Creates an unconditional operation that fetches this program's metadata.
-    pub fn query(&self) -> ProgramPropertiesQuery {
-        ObjectPropertiesQuery::new(self.clone())
-    }
-
+impl ObjectRef<Program> {
     /// Creates a builder for an operation that runs this program.
     pub fn run(&self) -> ProgramRunBuilder {
         let mut builder = ProgramRunBuilder::default();
         builder.program(self.clone());
         builder
-    }
-}
-
-impl IncludeRef {
-    /// Creates an unconditional operation that fetches this include's metadata.
-    pub fn query(&self) -> IncludePropertiesQuery {
-        ObjectPropertiesQuery::new(self.clone())
-    }
-}
-
-impl crate::object_properties::private::Sealed for ProgramRef {}
-
-impl ObjectProperties for ProgramRef {
-    type MediaVersion = ProgramMediaVersion;
-    type Representation = ProgramProperties;
-    type Error = ProgramError;
-
-    const CATEGORY: crate::CategoryId = PROGRAMS;
-
-    fn properties_uri(&self) -> &AdtUri {
-        self.uri()
-    }
-}
-
-impl crate::object_properties::private::Sealed for IncludeRef {}
-
-impl ObjectProperties for IncludeRef {
-    type MediaVersion = IncludeMediaVersion;
-    type Representation = IncludeProperties;
-    type Error = IncludeError;
-
-    const CATEGORY: crate::CategoryId = INCLUDES;
-
-    fn properties_uri(&self) -> &AdtUri {
-        self.uri()
     }
 }
 
@@ -262,7 +216,10 @@ mod tests {
     use http::{HeaderMap, HeaderValue, StatusCode, header};
 
     use super::*;
-    use crate::{Conditional, EntityTag, NegotiableMediaVersion};
+    use crate::{
+        Conditional, EntityTag, IncludeMediaVersion, IncludeProperties, IncludeRef,
+        NegotiableMediaVersion, ProgramMediaVersion, ProgramProperties, vocabulary::PROGRAMS,
+    };
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
     const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
@@ -305,8 +262,11 @@ mod tests {
     }
 
     fn include_properties_query() -> IncludePropertiesQuery {
-        IncludeRef::for_test(crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap())
-            .query()
+        IncludeRef::for_test(
+            "ZTEST",
+            crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
+        )
+        .query()
     }
 
     fn program_run() -> ProgramRun {

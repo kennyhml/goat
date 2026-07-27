@@ -88,9 +88,6 @@ pub enum ProgramError {
     #[error(transparent)]
     Compatibility(#[from] CompatibilityError),
 
-    #[error("program name `{name}` is empty or contains invalid whitespace or control characters")]
-    InvalidName { name: String },
-
     #[error("the program-run collection did not advertise its execution template")]
     MissingRunTemplate,
 
@@ -105,9 +102,6 @@ pub enum ProgramError {
 
     #[error("program-run response was not valid UTF-8: {0}")]
     InvalidRunOutputEncoding(#[source] std::string::FromUtf8Error),
-
-    #[error("could not construct the program resource URI: {0}")]
-    InvalidTarget(#[from] AdtUriError),
 
     #[error("invalid program XML: {0}")]
     InvalidResponse(#[source] serde_xml_rs::Error),
@@ -135,15 +129,6 @@ pub enum ProgramError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum IncludeError {
-    #[error(transparent)]
-    Compatibility(#[from] CompatibilityError),
-
-    #[error("include name `{name}` is empty or contains invalid whitespace or control characters")]
-    InvalidName { name: String },
-
-    #[error("could not construct the include resource URI: {0}")]
-    InvalidTarget(#[from] AdtUriError),
-
     #[error("invalid include XML: {0}")]
     InvalidResponse(#[source] serde_xml_rs::Error),
 
@@ -173,6 +158,15 @@ pub enum IncludeError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ObjectError {
+    #[error(transparent)]
+    Compatibility(#[from] CompatibilityError),
+
+    #[error("object name `{name}` is empty or contains invalid whitespace or control characters")]
+    InvalidName { name: String },
+
+    #[error("could not construct the object resource URI: {0}")]
+    InvalidTarget(#[from] AdtUriError),
+
     #[error("invalid object lock response: {0}")]
     InvalidLockResponse(#[from] serde_xml_rs::Error),
 

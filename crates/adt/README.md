@@ -138,18 +138,19 @@ execution capabilities:
 
 | Type | Represents | Created from |
 | --- | --- | --- |
-| `ObjectRef` | A repository-object identity and location, without implied capabilities | A validated `AdtUri`, a parsed URI, or a domain reference such as `ProgramRef` |
+| `ObjectRef` | A type-erased repository-object identity and location, without implied capabilities | A validated `AdtUri`, a parsed URI, or an erased typed reference |
+| `ObjectRef<T>` | An object identity tagged with a static `ObjectType` marker | `Client<Discovered>::object::<T>(name)` |
 | `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable domain reference such as `ProgramRef` |
-| `ProgramRef` | A program object resolved through discovery | `Client<Discovered>::object::<ProgramRef>(name)` |
-| `IncludeRef` | A standalone ABAP include resolved through discovery | `Client<Discovered>::object::<IncludeRef>(name)` |
+| `ProgramRef` | Alias for `ObjectRef<Program>` | `Client<Discovered>::object::<Program>(name)` |
+| `IncludeRef` | Alias for `ObjectRef<Include>` | `Client<Discovered>::object::<Include>(name)` |
 | `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources advertised by object representations | Fetched properties such as `ProgramProperties` |
 | `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
 
-Named domain references implement `FromDiscovery`, allowing a discovered
-client to resolve them without a type-specific client method:
+Object-type markers provide their statically known category, allowing a
+discovered client to construct typed references without type-specific methods:
 
 ```rust,ignore
-let program = client.object::<ProgramRef>("ZDEMO")?;
+let program = client.object::<Program>("ZDEMO")?;
 ```
 
 Constructing a reference performs no request. For a known object URI:
@@ -185,10 +186,10 @@ and V3 use the same payload schema, exposed as `ProgramPropertiesV2` and
 
 ```rust,ignore
 use goat_adt::{
-    ObjectVersion, Operation, ProgramMediaVersion, ProgramProperties, ProgramRef,
+    ObjectVersion, Operation, Program, ProgramMediaVersion, ProgramProperties,
 };
 
-let reference = client.object::<ProgramRef>("ZDEMO")?;
+let reference = client.object::<Program>("ZDEMO")?;
 let response = reference
     .query()
     .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
@@ -248,9 +249,9 @@ converted all relations listed above.
 advertised by central discovery and returns its rendered plain-text output:
 
 ```rust,ignore
-use goat_adt::{Operation, ProgramRef};
+use goat_adt::{Operation, Program};
 
-let program = client.object::<ProgramRef>("ZDEMO")?;
+let program = client.object::<Program>("ZDEMO")?;
 let output = program.run().build()?.execute(&client).await?;
 println!("{}", output.content);
 ```
@@ -268,9 +269,9 @@ collection and V2 representation. Resolution and media negotiation follow the
 same split as programs:
 
 ```rust,ignore
-use goat_adt::{IncludeProperties, IncludeRef, ObjectVersion, Operation};
+use goat_adt::{Include, IncludeProperties, ObjectVersion, Operation};
 
-let reference = client.object::<IncludeRef>("ZINCLUDE")?;
+let reference = client.object::<Include>("ZINCLUDE")?;
 let response = reference
     .query()
     .version(ObjectVersion::Active)
@@ -298,10 +299,10 @@ Object locking and source updates are generic stateful operations. A
 `ProgramRef` resolves its object and source resources from central discovery:
 
 ```rust,ignore
-use goat_adt::{AccessMode, Operation, ProgramRef};
+use goat_adt::{AccessMode, Operation, Program};
 
 let session = client.create_user_session();
-let program = client.object::<ProgramRef>("ZDEMO")?;
+let program = client.object::<Program>("ZDEMO")?;
 let lock_handle = program
     .lock(AccessMode::Modify)
     .execute(&session)

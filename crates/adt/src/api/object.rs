@@ -5,9 +5,10 @@ use crate::{
     client::{Client, LoggedOnState},
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
+    objects::ObjectRef,
     operation::{Operation, Stateful, Stateless},
     protocol::{AdtRequest, AdtResponse, EntityTag},
-    resource::{IncludeRef, ObjectRef, ProgramRef, SourceRef},
+    resource::SourceRef,
     vocabulary::{PostAction, media_type, query_parameter},
 };
 
@@ -58,8 +59,6 @@ impl AccessMode {
 /// The operation sends `POST` with `_action=LOCK` and the configured
 /// `accessMode`. The returned [`LockHandle`] must remain in the same user
 /// session as subsequent update or unlock operations.
-///
-/// TODO: Are these WB operations? ADT kinda defines them like that.
 #[derive(Debug)]
 #[readonly::make]
 pub struct ObjectLock {
@@ -68,6 +67,15 @@ pub struct ObjectLock {
 
     /// Whether the object is locked for display or modification.
     pub access_mode: AccessMode,
+}
+
+impl ObjectLock {
+    pub(crate) fn new(object: ObjectRef, access_mode: AccessMode) -> Self {
+        Self {
+            object,
+            access_mode,
+        }
+    }
 }
 
 impl<S: LoggedOnState> Operation<S> for ObjectLock {
@@ -90,12 +98,17 @@ impl<S: LoggedOnState> Operation<S> for ObjectLock {
 }
 
 /// Releases a [`LockHandle`] within its SAP user session.
-/// TODO: Are these WB operations? ADT kinda defines them like that.
 #[derive(Debug)]
 #[readonly::make]
 pub struct ObjectUnlock {
     /// The lock to release.
     pub lock_handle: LockHandle,
+}
+
+impl ObjectUnlock {
+    pub(crate) fn new(lock_handle: LockHandle) -> Self {
+        Self { lock_handle }
+    }
 }
 
 impl<S: LoggedOnState> Operation<S> for ObjectUnlock {
@@ -118,7 +131,6 @@ impl<S: LoggedOnState> Operation<S> for ObjectUnlock {
 ///
 /// This operation is stateful and requires a [`LockHandle`] issued for the
 /// object being updated. The builder verifies this relationship.
-/// TODO: Are these WB operations? ADT kinda defines them like that.
 #[derive(Builder, Debug)]
 #[builder(setter(into), build_fn(validate = Self::validate))]
 #[readonly::make]
@@ -170,52 +182,7 @@ impl<S: LoggedOnState> Operation<S> for ObjectSourceUpdate {
 impl LockHandle {
     /// Consumes this handle and creates an operation that removes the lock.
     pub fn remove(self) -> ObjectUnlock {
-        ObjectUnlock { lock_handle: self }
-    }
-}
-
-// It is incovenient for consumers to always construct operations from scratch, so we
-// can implement them for the reference types they typically already deal with.
-
-impl ProgramRef {
-    /// Creates an object-lock operation for this program.
-    pub fn lock(&self, access_mode: AccessMode) -> ObjectLock {
-        ObjectLock {
-            object: self.object().clone(),
-            access_mode,
-        }
-    }
-
-    /// Creates an operation that releases this program's object lock.
-    pub fn unlock(&self, lock_handle: LockHandle) -> Result<ObjectUnlock, ObjectError> {
-        if self.object() != &lock_handle.object {
-            return Err(ObjectError::LockHandleObjectMismatch {
-                expected: self.to_string(),
-                actual: lock_handle.object.to_string(),
-            });
-        }
-        Ok(ObjectUnlock { lock_handle })
-    }
-}
-
-impl IncludeRef {
-    /// Creates an object-lock operation for this include.
-    pub fn lock(&self, access_mode: AccessMode) -> ObjectLock {
-        ObjectLock {
-            object: self.object().clone(),
-            access_mode,
-        }
-    }
-
-    /// Creates an operation that releases this include's object lock.
-    pub fn unlock(&self, lock_handle: LockHandle) -> Result<ObjectUnlock, ObjectError> {
-        if self.object() != &lock_handle.object {
-            return Err(ObjectError::LockHandleObjectMismatch {
-                expected: self.to_string(),
-                actual: lock_handle.object.to_string(),
-            });
-        }
-        Ok(ObjectUnlock { lock_handle })
+        ObjectUnlock::new(self)
     }
 }
 
@@ -249,6 +216,7 @@ fn expect_ok(response: &AdtResponse) -> Result<(), ResponseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProgramRef;
 
     #[test]
     fn object_operations_require_logon_but_not_discovery() {
@@ -270,7 +238,7 @@ mod tests {
             "ZSECOND",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap(),
         );
-        let lock_handle = LockHandle::new(first.object().clone(), "LOCK-HANDLE".to_owned());
+        let lock_handle = LockHandle::new(first.erase(), "LOCK-HANDLE".to_owned());
 
         let error = second
             .source()
@@ -293,7 +261,7 @@ mod tests {
             "ZSECOND",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap(),
         );
-        let lock_handle = LockHandle::new(first.object().clone(), "LOCK-HANDLE".to_owned());
+        let lock_handle = LockHandle::new(first.erase(), "LOCK-HANDLE".to_owned());
 
         let error = second.unlock(lock_handle).unwrap_err();
 

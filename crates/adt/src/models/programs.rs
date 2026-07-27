@@ -2,8 +2,8 @@ use serde::Deserialize;
 
 use crate::{
     AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, EntityTag, HtmlSourceRef,
-    IncludeError, IncludeRef, NegotiableMediaVersion, ObjectRef, ObjectStateRef,
-    ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, ProgramError, ProgramRef,
+    Include, IncludeError, IncludeRef, NegotiableMediaVersion, ObjectRef, ObjectStateRef,
+    ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, Program, ProgramError, ProgramRef,
     RawObjectProperties, SourceRef, SourceVersionsRef, TextElementsRef,
     resource::{AdtLinkMetadata, resolve_href},
     vocabulary::{Relation, media_type},
@@ -67,10 +67,10 @@ impl NegotiableMediaVersion for ProgramMediaVersion {
     }
 }
 
-impl TryFrom<RawObjectProperties<ProgramRef>> for ProgramProperties {
+impl TryFrom<RawObjectProperties<Program>> for ProgramProperties {
     type Error = ProgramError;
 
-    fn try_from(raw: RawObjectProperties<ProgramRef>) -> Result<Self, Self::Error> {
+    fn try_from(raw: RawObjectProperties<Program>) -> Result<Self, Self::Error> {
         let RawObjectProperties {
             resource,
             version: media_version,
@@ -126,10 +126,10 @@ impl NegotiableMediaVersion for IncludeMediaVersion {
     }
 }
 
-impl TryFrom<RawObjectProperties<IncludeRef>> for IncludeProperties {
+impl TryFrom<RawObjectProperties<Include>> for IncludeProperties {
     type Error = IncludeError;
 
-    fn try_from(raw: RawObjectProperties<IncludeRef>) -> Result<Self, Self::Error> {
+    fn try_from(raw: RawObjectProperties<Include>) -> Result<Self, Self::Error> {
         let RawObjectProperties {
             resource,
             version,
@@ -288,7 +288,7 @@ impl ProgramPropertiesV3 {
         let links = resolve_links(reference.uri(), raw.links)?;
         let source_link = find_link(&links, Relation::Source, Some(media_type::SOURCE))
             .ok_or(ProgramError::MissingSourceLink)?;
-        let source = SourceRef::from_link(reference.object().clone(), source_link);
+        let source = SourceRef::from_link(reference.erase(), source_link);
         let declared_source = resolve_href(reference.uri(), &raw.source_uri).map_err(|source| {
             ProgramError::InvalidLink {
                 href: raw.source_uri.clone(),
@@ -470,7 +470,7 @@ impl IncludePropertiesV2 {
         let links = resolve_include_links(reference.uri(), raw.links)?;
         let source_link = find_link(&links, Relation::Source, Some(media_type::SOURCE))
             .ok_or(IncludeError::MissingSourceLink)?;
-        let source = SourceRef::from_link(reference.object().clone(), source_link);
+        let source = SourceRef::from_link(reference.erase(), source_link);
         let declared_source = resolve_href(reference.uri(), &raw.source_uri).map_err(|source| {
             IncludeError::InvalidLink {
                 href: raw.source_uri.clone(),
@@ -852,6 +852,7 @@ mod tests {
     #[test]
     fn parses_include_properties() {
         let reference = IncludeRef::for_test(
+            "ZTEST",
             crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
         );
         let properties = IncludeProperties::try_from(RawObjectProperties {

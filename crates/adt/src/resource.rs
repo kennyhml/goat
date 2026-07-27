@@ -2,10 +2,7 @@ use std::fmt;
 
 use url::Url;
 
-use crate::{
-    AdtUri, AdtUriError, Capabilities, CategoryId, CompatibilityError, IncludeError, ProgramError,
-    vocabulary::{INCLUDES, PROGRAMS},
-};
+use crate::{AdtUri, AdtUriError, ObjectRef};
 const LINK_RESOLUTION_ORIGIN: &str = "https://adt.invalid";
 
 /// A concrete link advertised by an ADT resource representation.
@@ -131,67 +128,6 @@ impl fmt::Display for AdtLink {
     }
 }
 
-/// An ADT repository-object version accepted by the `version` query parameter.
-///
-/// These values are the public URI vocabulary from `IF_ADT_URI_QUERY_PARAMETERS`.
-/// SAP maps them internally to one-character ABAP Workbench states.
-///
-/// # SAP references
-///
-/// - `IF_ADT_URI_QUERY_PARAMETERS` defines `CO_VERSION` and all external values;
-/// - `CL_SEDI_ADT_RES_SOURCE->GET` reads the query parameter for programs;
-/// - `CL_ADT_UTILITY->GET_WB_VERSION` maps it to Workbench `R3STATE` values.
-///
-/// Some constants can also be found in the type-pool `SWBM`
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ObjectVersion {
-    /// The persistent active object (R3STATE `A`)
-    Active,
-
-    /// An inactive object awaiting activation (R3STATE `I`)
-    Inactive,
-
-    /// Uses the inactive version if the requesting user is editing it,
-    /// otherwise the active version (R3STATE `_` - may not exist)
-    WorkingArea,
-
-    /// A newly created object (R3STATE `N`)
-    New,
-
-    /// An object for which only part of the content is active (R3STATE `P`)
-    PartlyActive,
-}
-
-impl ObjectVersion {
-    /// Returns the exact value used by ADT URI query parameters.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Inactive => "inactive",
-            Self::WorkingArea => "workingArea",
-            Self::New => "new",
-            Self::PartlyActive => "partlyActive",
-        }
-    }
-
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "active" => Some(Self::Active),
-            "inactive" => Some(Self::Inactive),
-            "workingArea" => Some(Self::WorkingArea),
-            "new" => Some(Self::New),
-            "partlyActive" => Some(Self::PartlyActive),
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for ObjectVersion {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 macro_rules! relation_ref {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -263,44 +199,6 @@ relation_ref!(
     ParserRef
 );
 
-/// A validated reference to an ADT repository object.
-///
-/// An object reference is an identity and resource location, not a fetched
-/// object representation or proof of protocol capabilities. In particular, it
-/// does not imply that the object has source code or supports locking.
-/// Constructing one performs no I/O.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ObjectRef(AdtUri);
-
-impl ObjectRef {
-    /// Creates an object reference from a validated ADT resource URI.
-    pub fn new(uri: AdtUri) -> Self {
-        Self(uri)
-    }
-
-    /// Parses and validates an object resource URI.
-    pub fn parse(value: &str) -> Result<Self, AdtUriError> {
-        AdtUri::parse(value).map(Self)
-    }
-
-    /// Returns the object's resource URI.
-    pub fn uri(&self) -> &AdtUri {
-        &self.0
-    }
-}
-
-impl fmt::Display for ObjectRef {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-impl From<AdtUri> for ObjectRef {
-    fn from(value: AdtUri) -> Self {
-        Self::new(value)
-    }
-}
-
 /// A package reference embedded in an ADT object representation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[readonly::make]
@@ -356,166 +254,17 @@ impl fmt::Display for SourceRef {
     }
 }
 
-/// Constructs a typed reference from central-discovery capabilities.
-///
-/// Implementations identify their collection through [`FromDiscovery::CATEGORY`]
-/// and apply the domain-specific rules for resolving a named member. The
-/// conversion performs no request.
-pub trait FromDiscovery: Sized {
-    /// The error produced while resolving this reference.
-    type Error;
-
-    /// The stable discovery category identifying the reference's collection.
-    const CATEGORY: CategoryId;
-
-    /// Resolves `name` using the supplied central-discovery capabilities.
-    fn from_discovery(capabilities: &Capabilities, name: &str) -> Result<Self, Self::Error>;
-}
-
-/// A program identity resolved from the programs collection in central discovery.
-///
-/// [`Client::object`](crate::Client::object) does not require callers to know the
-/// programs collection URI. It looks up the stable programs category and
-/// appends the program name as one encoded path segment.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ProgramRef {
-    name: String,
-    object: ObjectRef,
-}
-
-impl ProgramRef {
-    #[cfg(test)]
-    pub(crate) fn for_test(name: &str, uri: AdtUri) -> Self {
-        Self {
-            name: name.to_ascii_uppercase(),
-            object: ObjectRef::new(uri),
-        }
-    }
-
-    /// Returns the canonical uppercase program name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the program object reference.
-    pub fn object(&self) -> &ObjectRef {
-        &self.object
-    }
-
-    /// Returns the program object URI.
-    pub fn uri(&self) -> &AdtUri {
-        self.object.uri()
-    }
-
-    /// Returns the program's conventional `source/main` resource.
-    ///
-    /// This convention belongs to the ADT program resource profile; it is not
-    /// implied by the underlying [`ObjectRef`]. Fetched
-    /// [`ProgramPropertiesV3`](crate::ProgramPropertiesV3) instead exposes the source
-    /// link advertised by SAP.
-    pub fn source(&self) -> SourceRef {
-        let uri = append_segments(self.uri(), ["source", "main"])
-            .expect("static program source path segments form a valid ADT URI");
-        SourceRef {
-            object: self.object.clone(),
-            uri,
-            query: Vec::new(),
-            fragment: None,
-            etag: None,
-        }
-    }
-}
-
-impl fmt::Display for ProgramRef {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.object.fmt(formatter)
-    }
-}
-
-impl FromDiscovery for ProgramRef {
-    type Error = ProgramError;
-
-    const CATEGORY: CategoryId = PROGRAMS;
-
-    fn from_discovery(
-        capabilities: &Capabilities,
-        program_name: &str,
-    ) -> Result<Self, Self::Error> {
-        validate_program_name(program_name)?;
-        let program_name = program_name.to_ascii_uppercase();
-        let collection = capabilities
-            .collection(Self::CATEGORY.scheme, Self::CATEGORY.term)
-            .ok_or(CompatibilityError::MissingCollection(Self::CATEGORY))?;
-        let uri = append_segments(collection.target(), [&program_name])?;
-        Ok(Self {
-            name: program_name,
-            object: ObjectRef::new(uri),
-        })
-    }
-}
-
-/// A standalone ABAP include resolved from the includes collection.
-///
-/// Includes share the ADT programs domain with [`ProgramRef`], but use their
-/// own discovery collection and representation contract.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct IncludeRef(ObjectRef);
-
-impl IncludeRef {
-    #[cfg(test)]
-    pub(crate) fn for_test(uri: AdtUri) -> Self {
-        Self(ObjectRef::new(uri))
-    }
-
-    /// Returns the include object reference.
-    pub fn object(&self) -> &ObjectRef {
-        &self.0
-    }
-
-    /// Returns the include object URI.
-    pub fn uri(&self) -> &AdtUri {
-        self.0.uri()
-    }
-
-    /// Returns the include's conventional `source/main` resource.
-    pub fn source(&self) -> SourceRef {
-        let uri = append_segments(self.uri(), ["source", "main"])
-            .expect("static include source path segments form a valid ADT URI");
-        SourceRef {
-            object: self.0.clone(),
-            uri,
-            query: Vec::new(),
-            fragment: None,
-            etag: None,
-        }
-    }
-}
-
-impl fmt::Display for IncludeRef {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-impl FromDiscovery for IncludeRef {
-    type Error = IncludeError;
-
-    const CATEGORY: CategoryId = INCLUDES;
-
-    fn from_discovery(
-        capabilities: &Capabilities,
-        include_name: &str,
-    ) -> Result<Self, Self::Error> {
-        validate_include_name(include_name)?;
-        let collection = capabilities
-            .collection(Self::CATEGORY.scheme, Self::CATEGORY.term)
-            .ok_or(CompatibilityError::MissingCollection(Self::CATEGORY))?;
-        let uri = append_segments(collection.target(), [include_name])?;
-        Ok(Self(ObjectRef::new(uri)))
-    }
-}
-
 impl SourceRef {
+    pub(crate) fn new(object: ObjectRef, uri: AdtUri) -> Self {
+        Self {
+            object,
+            uri,
+            query: Vec::new(),
+            fragment: None,
+            etag: None,
+        }
+    }
+
     pub(crate) fn from_link(object: ObjectRef, link: &AdtLink) -> Self {
         Self {
             object,
@@ -527,91 +276,9 @@ impl SourceRef {
     }
 }
 
-fn validate_program_name(program_name: &str) -> Result<(), ProgramError> {
-    if program_name.is_empty()
-        || program_name.trim() != program_name
-        || program_name.chars().any(char::is_control)
-        || matches!(program_name, "." | "..")
-    {
-        return Err(ProgramError::InvalidName {
-            name: program_name.to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn validate_include_name(include_name: &str) -> Result<(), IncludeError> {
-    if include_name.is_empty()
-        || include_name.trim() != include_name
-        || include_name.chars().any(char::is_control)
-        || matches!(include_name, "." | "..")
-    {
-        return Err(IncludeError::InvalidName {
-            name: include_name.to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn append_segments<I, T>(base: &AdtUri, segments: I) -> Result<AdtUri, AdtUriError>
-where
-    I: IntoIterator<Item = T>,
-    T: AsRef<str>,
-{
-    let mut url = Url::parse(&format!("https://adt.invalid{}", base.as_str()))
-        .expect("a validated root-relative ADT URI forms a valid URL");
-    url.path_segments_mut()
-        .expect("an HTTP URL supports path segments")
-        .extend(
-            segments
-                .into_iter()
-                .map(|segment| segment.as_ref().to_owned()),
-        );
-    AdtUri::parse(url.path())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const DISCOVERY_XML: &[u8] = include_bytes!("../tests/fixtures/discovery.xml");
-
-    #[test]
-    fn canonicalizes_program_names_when_resolving_references() {
-        let capabilities = crate::models::parse_capabilities(DISCOVERY_XML).unwrap();
-        let program = ProgramRef::from_discovery(&capabilities, "z_program").unwrap();
-
-        assert_eq!(program.name(), "Z_PROGRAM");
-        assert_eq!(
-            program.uri().as_str(),
-            "/sap/bc/adt/programs/programs/Z_PROGRAM"
-        );
-    }
-
-    #[test]
-    fn derives_the_conventional_source_from_a_program_reference() {
-        let program = ProgramRef::for_test(
-            "ZPROGRAM",
-            AdtUri::parse("/sap/bc/adt/programs/programs/ZPROGRAM").unwrap(),
-        );
-
-        assert_eq!(
-            program.source().uri.as_str(),
-            "/sap/bc/adt/programs/programs/ZPROGRAM/source/main"
-        );
-    }
-
-    #[test]
-    fn encodes_dynamic_names_as_single_path_segments() {
-        let collection = AdtUri::parse("/sap/bc/adt/programs/programs").unwrap();
-
-        assert_eq!(
-            append_segments(&collection, ["/DMO/PROGRAM"])
-                .unwrap()
-                .as_str(),
-            "/sap/bc/adt/programs/programs/%2FDMO%2FPROGRAM"
-        );
-    }
 
     #[test]
     fn resolves_the_relative_link_forms_emitted_by_programs() {
@@ -657,20 +324,6 @@ mod tests {
             "../../../../../public/bc/icf/logoff",
         ] {
             assert!(resolve_href(&program, href).is_err(), "accepted {href}");
-        }
-    }
-
-    #[test]
-    fn object_versions_use_the_adt_query_parameter_vocabulary() {
-        for (version, value) in [
-            (ObjectVersion::Active, "active"),
-            (ObjectVersion::Inactive, "inactive"),
-            (ObjectVersion::WorkingArea, "workingArea"),
-            (ObjectVersion::New, "new"),
-            (ObjectVersion::PartlyActive, "partlyActive"),
-        ] {
-            assert_eq!(version.as_str(), value);
-            assert_eq!(ObjectVersion::parse(value), Some(version));
         }
     }
 }

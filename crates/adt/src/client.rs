@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    Capabilities, CategoryId, Collection, FromDiscovery, SessionInformation, Transport, UserSession,
-};
+use crate::{Capabilities, CategoryId, Collection, SessionInformation, Transport, UserSession};
 
 mod private {
     pub trait Sealed {}
@@ -120,24 +118,6 @@ impl Client<Discovered> {
     pub fn collection(&self, category: CategoryId) -> Option<&Collection> {
         self.capabilities()
             .collection(category.scheme, category.term)
-    }
-
-    /// Resolves a typed object reference from central discovery.
-    ///
-    /// `T` identifies the collection category and interprets that collection's
-    /// member convention. Resolving a reference does not perform I/O; it is
-    /// resolved against the discovered collections.
-    ///
-    /// ```rust,ignore
-    /// use goat_adt::ProgramRef;
-    ///
-    /// let program = client.object::<ProgramRef>("ZDEMO")?;
-    /// ```
-    pub fn object<T>(&self, name: &str) -> Result<T, T::Error>
-    where
-        T: FromDiscovery,
-    {
-        T::from_discovery(self.capabilities(), name)
     }
 }
 

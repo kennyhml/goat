@@ -1,8 +1,8 @@
 #![cfg(feature = "reqwest")]
 
 use goat_adt::{
-    AccessMode, Client, Conditional, EntityTag, IncludeMediaVersion, IncludeProperties, IncludeRef,
-    ObjectVersion, Operation, ProgramMediaVersion, ProgramProperties, ProgramRef, ReqwestTransport,
+    AccessMode, Client, Conditional, EntityTag, Include, IncludeMediaVersion, IncludeProperties,
+    ObjectVersion, Operation, Program, ProgramMediaVersion, ProgramProperties, ReqwestTransport,
 };
 use httpmock::Mock;
 use httpmock::prelude::*;
@@ -75,7 +75,7 @@ async fn program_run_uses_the_discovered_profiled_template() {
         .discover()
         .await
         .unwrap();
-    let program = client.object::<ProgramRef>("z_test").unwrap();
+    let program = client.object::<Program>("z_test").unwrap();
     let output = program
         .run()
         .profiler_id("TRACE ID")
@@ -143,7 +143,7 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
         .discover()
         .await
         .unwrap();
-    let reference = client.object::<IncludeRef>("ZTEST").unwrap();
+    let reference = client.object::<Include>("ZTEST").unwrap();
     let response = reference
         .query()
         .priority([IncludeMediaVersion::V2])
@@ -224,7 +224,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
         .discover()
         .await
         .unwrap();
-    let reference = client.object::<ProgramRef>("Z_TEST").unwrap();
+    let reference = client.object::<Program>("Z_TEST").unwrap();
     let response = reference.query().execute(&client).await.unwrap();
     assert_eq!(response.media_version(), ProgramMediaVersion::V3);
     let program = match response {
@@ -382,7 +382,7 @@ async fn program_properties_query_honors_v2_first_priority() {
         .await
         .unwrap();
     let response = client
-        .object::<ProgramRef>("Z_TEST")
+        .object::<Program>("Z_TEST")
         .unwrap()
         .query()
         .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
@@ -440,7 +440,7 @@ async fn program_properties_query_returns_not_modified_for_a_current_etag() {
         .await
         .unwrap();
     let response = client
-        .object::<ProgramRef>("Z_TEST")
+        .object::<Program>("Z_TEST")
         .unwrap()
         .query()
         .if_none_match(EntityTag::from_static("202607251959580008"))
@@ -573,7 +573,7 @@ async fn program_lock_and_update_share_one_user_session() {
         .discover()
         .await
         .unwrap();
-    let program = client.object::<ProgramRef>("Z_GOAT_TEST").unwrap();
+    let program = client.object::<Program>("Z_GOAT_TEST").unwrap();
     let source = program.source().query().execute(&client).await.unwrap();
     let session = client.create_user_session();
 
@@ -592,7 +592,7 @@ async fn program_lock_and_update_share_one_user_session() {
         .execute(&session)
         .await
         .unwrap();
-    assert_eq!(&lock_handle.object, program.object());
+    assert_eq!(lock_handle.object.uri(), program.uri());
     assert_eq!(lock_handle.handle, "LOCK-HANDLE-1");
     program
         .unlock(lock_handle)
