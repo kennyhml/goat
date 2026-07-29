@@ -38,18 +38,34 @@ The generic layer should own:
 Each sealed object-type profile should provide:
 
 - Its discovery `CategoryId`.
-- Its associated media-version and representation types.
-- Its domain error conversion.
+- Its associated media-version and properties types.
+- A parser from the negotiated response body into those properties.
 
-Each version-tagged representation implements `TryFrom<RawObjectProperties<T>>`
-for its object-type marker in the models layer. That conversion
-owns XML parsing and semantic validation. The generic query handles missing or
-unsupported response `Content-Type` values before handing the owned body to the
-model conversion.
+The generic query handles missing or unsupported response `Content-Type` values,
+then passes the typed resource, negotiated media version, body, and ETag to the
+profile parser. Domain-specific parsing helpers may return `ProgramError` or
+`IncludeError` internally; the profile adapts those errors to the fixed
+`ResponseError` operation boundary.
 
 Keep `ProgramProperties`, `IncludeProperties`, and future
 `ClassProperties` separate. Their XML schemas, links, and domain semantics are
 not interchangeable.
+
+The sealed object-properties profile has this shape:
+
+```rust
+pub trait ObjectProperties: ObjectType {
+    type MediaVersion: NegotiableMediaVersion;
+    type Properties: Send;
+
+    fn parse(
+        resource: &ObjectRef<Self>,
+        version: Self::MediaVersion,
+        body: Vec<u8>,
+        etag: Option<EntityTag>,
+    ) -> Result<Self::Properties, ResponseError>;
+}
+```
 
 ## Class Properties Contract
 

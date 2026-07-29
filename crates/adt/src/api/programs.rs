@@ -54,8 +54,9 @@ impl Operation<Discovered> for ProgramRun {
 
     fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
         let template = program_run_template(client)?;
+        let uri_name = self.program.name().to_ascii_lowercase();
         let (target, query) =
-            expand_program_run_target(template, self.program.name(), self.profiler_id.as_deref())
+            expand_program_run_target(template, &uri_name, self.profiler_id.as_deref())
                 .map_err(program_operation_error)?;
         let mut request = AdtRequest::new(Method::POST, target);
         for (name, value) in query {

@@ -5,7 +5,7 @@ use crate::{
     client::{Client, LoggedOnState},
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
-    objects::ObjectRef,
+    objects::{Include, ObjectRef, ObjectType, Program, append_segments},
     operation::{Operation, Stateful, Stateless},
     protocol::{AdtRequest, AdtResponse, EntityTag},
     resource::SourceRef,
@@ -54,6 +54,48 @@ impl AccessMode {
     }
 }
 
+/// Annotates an object type that supports locking and consequently also
+/// unlocking operations.
+///
+/// The created lock handle is bound to the [`ObjectRef`] it was created for.
+/// Trying to remove a lock from another object fails before a request is made.
+pub trait Lock: ObjectType {}
+
+impl Lock for Program {}
+impl Lock for Include {}
+
+impl<T: Lock> ObjectRef<T> {
+    /// Creates an object-lock operation.
+    pub fn lock(&self, access_mode: AccessMode) -> LockRequest {
+        LockRequest::new(self.erase(), access_mode)
+    }
+
+    /// Creates an operation that releases this object's lock.
+    pub fn unlock(&self, lock_handle: LockHandle) -> Result<UnlockRequest, ObjectError> {
+        if self.uri() != lock_handle.object.uri() {
+            return Err(ObjectError::LockHandleObjectMismatch {
+                expected: self.to_string(),
+                actual: lock_handle.object.to_string(),
+            });
+        }
+        Ok(UnlockRequest::new(lock_handle))
+    }
+}
+
+impl ObjectRef<Program> {
+    /// Returns the program's conventional `source/main` resource.
+    pub fn source(&self) -> SourceRef {
+        conventional_source(self)
+    }
+}
+
+impl ObjectRef<Include> {
+    /// Returns the include's conventional `source/main` resource.
+    pub fn source(&self) -> SourceRef {
+        conventional_source(self)
+    }
+}
+
 /// Locks a repository object within a [`crate::UserSession`].
 ///
 /// The operation sends `POST` with `_action=LOCK` and the configured
@@ -61,7 +103,7 @@ impl AccessMode {
 /// session as subsequent update or unlock operations.
 #[derive(Debug)]
 #[readonly::make]
-pub struct ObjectLock {
+pub struct LockRequest {
     /// The repository object to lock.
     pub object: ObjectRef,
 
@@ -69,7 +111,7 @@ pub struct ObjectLock {
     pub access_mode: AccessMode,
 }
 
-impl ObjectLock {
+impl LockRequest {
     pub(crate) fn new(object: ObjectRef, access_mode: AccessMode) -> Self {
         Self {
             object,
@@ -78,7 +120,7 @@ impl ObjectLock {
     }
 }
 
-impl<S: LoggedOnState> Operation<S> for ObjectLock {
+impl<S: LoggedOnState> Operation<S> for LockRequest {
     type Response = LockHandle;
     type Kind = Stateful;
 
@@ -100,18 +142,18 @@ impl<S: LoggedOnState> Operation<S> for ObjectLock {
 /// Releases a [`LockHandle`] within its SAP user session.
 #[derive(Debug)]
 #[readonly::make]
-pub struct ObjectUnlock {
+pub struct UnlockRequest {
     /// The lock to release.
     pub lock_handle: LockHandle,
 }
 
-impl ObjectUnlock {
+impl UnlockRequest {
     pub(crate) fn new(lock_handle: LockHandle) -> Self {
         Self { lock_handle }
     }
 }
 
-impl<S: LoggedOnState> Operation<S> for ObjectUnlock {
+impl<S: LoggedOnState> Operation<S> for UnlockRequest {
     type Response = ();
     type Kind = Stateful;
 
@@ -181,8 +223,8 @@ impl<S: LoggedOnState> Operation<S> for ObjectSourceUpdate {
 
 impl LockHandle {
     /// Consumes this handle and creates an operation that removes the lock.
-    pub fn remove(self) -> ObjectUnlock {
-        ObjectUnlock::new(self)
+    pub fn remove(self) -> UnlockRequest {
+        UnlockRequest::new(self)
     }
 }
 
@@ -200,6 +242,12 @@ impl SourceRef {
         builder.source(self.clone());
         builder
     }
+}
+
+fn conventional_source<T: ObjectType>(object: &ObjectRef<T>) -> SourceRef {
+    let uri = append_segments(object.uri(), ["source", "main"])
+        .expect("static source path segments form a valid ADT URI");
+    SourceRef::new(object.erase(), uri)
 }
 
 fn expect_ok(response: &AdtResponse) -> Result<(), ResponseError> {
@@ -223,9 +271,22 @@ mod tests {
         fn accepts_logged_on<O: Operation<crate::LoggedOn>>() {}
 
         accepts_logged_on::<ObjectSourceQuery>();
-        accepts_logged_on::<ObjectLock>();
-        accepts_logged_on::<ObjectUnlock>();
+        accepts_logged_on::<LockRequest>();
+        accepts_logged_on::<UnlockRequest>();
         accepts_logged_on::<ObjectSourceUpdate>();
+    }
+
+    #[test]
+    fn derives_the_conventional_source_from_a_program_reference() {
+        let program = ProgramRef::for_test(
+            "ZPROGRAM",
+            crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZPROGRAM").unwrap(),
+        );
+
+        assert_eq!(
+            program.source().uri.as_str(),
+            "/sap/bc/adt/programs/programs/ZPROGRAM/source/main"
+        );
     }
 
     #[test]

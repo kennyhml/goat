@@ -50,7 +50,7 @@ async fn program_run_uses_the_discovered_profiled_template() {
     let run = server
         .mock_async(|when, then| {
             when.method(POST)
-                .path("/sap/bc/adt/programs/programrun/Z_TEST")
+                .path("/sap/bc/adt/programs/programrun/z_test")
                 .query_param("profilerId", "TRACE ID")
                 .header("accept", "text/plain")
                 .header("x-csrf-token", "CSRF-TOKEN-RUN")
@@ -107,7 +107,7 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
     let metadata = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/programs/includes/ZTEST")
+                .path("/sap/bc/adt/programs/includes/ztest")
                 .query_param("version", "active")
                 .header("accept", "application/vnd.sap.adt.programs.includes.v2+xml")
                 .header("cache-control", "no-cache");
@@ -123,7 +123,7 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
     let get_source = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/programs/includes/ZTEST/source/main")
+                .path("/sap/bc/adt/programs/includes/ztest/source/main")
                 .header("accept", "text/plain");
             then.status(200).body(SOURCE);
         })
@@ -160,7 +160,7 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
 
     assert_eq!(include.reference, reference);
     assert_eq!(include.name, "ZTEST");
-    assert_eq!(include.object_type, "PROG/I");
+    assert_eq!(include.object_type.to_string(), "PROG/I");
     assert_eq!(include.version, ObjectVersion::Active);
     assert_eq!(include.context_ref_count, 0);
     assert_eq!(include.package.name, "$TMP");
@@ -189,7 +189,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     let metadata = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/programs/programs/Z_TEST")
+                .path("/sap/bc/adt/programs/programs/z_test")
                 .header("accept", "application/vnd.sap.adt.programs.programs.v3+xml")
                 .header("cache-control", "no-cache");
             then.status(200)
@@ -204,7 +204,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     let get_source = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/programs/programs/Z_TEST/source/main")
+                .path("/sap/bc/adt/programs/programs/z_test/source/main")
                 .header("accept", "text/plain");
             then.status(200).body(SOURCE);
         })
@@ -235,13 +235,13 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
 
     assert_eq!(program.reference, reference);
     assert_eq!(program.name, "Z_TEST");
-    assert_eq!(program.object_type, "PROG/P");
+    assert_eq!(program.object_type.to_string(), "PROG/P");
     assert_eq!(program.version, ObjectVersion::Inactive);
     assert_eq!(program.program_type, "executableProgram");
     assert!(program.fix_point_arithmetic);
     assert!(program.unicode_check_active);
     assert_eq!(program.package.name, "$TMP");
-    assert_eq!(program.package.object_type, "DEVC/K");
+    assert_eq!(program.package.object_type.to_string(), "DEVC/K");
     assert_eq!(
         program.package.object.uri().as_str(),
         "/sap/bc/adt/packages/%24tmp"
@@ -275,7 +275,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     assert_eq!(parser_link.etag.as_deref(), Some("757"));
     assert_eq!(
         program.source.uri.as_str(),
-        "/sap/bc/adt/programs/programs/Z_TEST/source/main"
+        "/sap/bc/adt/programs/programs/z_test/source/main"
     );
     assert!(program.source.query.is_empty());
     assert_eq!(program.source.etag.as_deref(), Some("202607251959580001"));
@@ -286,7 +286,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     );
     assert_eq!(
         program.versions.as_ref().unwrap().uri.as_str(),
-        "/sap/bc/adt/programs/programs/Z_TEST/source/main/versions"
+        "/sap/bc/adt/programs/programs/z_test/source/main/versions"
     );
     assert_eq!(
         program.object_structure.as_ref().unwrap().uri.as_str(),
@@ -354,7 +354,7 @@ async fn program_properties_query_honors_v2_first_priority() {
     let metadata = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/programs/programs/Z_TEST")
+                .path("/sap/bc/adt/programs/programs/z_test")
                 .query_param("version", "workingArea")
                 .header("accept", "application/vnd.sap.adt.programs.programs.v2+xml");
             then.status(200)
@@ -417,7 +417,7 @@ async fn program_properties_query_returns_not_modified_for_a_current_etag() {
     let metadata = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/programs/programs/Z_TEST")
+                .path("/sap/bc/adt/programs/programs/z_test")
                 .query_param("version", "inactive")
                 .header("accept", "application/vnd.sap.adt.programs.programs.v3+xml")
                 .header("if-none-match", "202607251959580008");
@@ -487,7 +487,7 @@ async fn program_lock_and_update_share_one_user_session() {
     let get_source = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/programs/programs/Z_GOAT_TEST/source/main")
+                .path("/sap/bc/adt/programs/programs/z_goat_test/source/main")
                 .header("accept", "text/plain");
             then.status(200)
                 .header("etag", "SOURCE-ETAG-1")
@@ -497,7 +497,7 @@ async fn program_lock_and_update_share_one_user_session() {
     let lock_program = server
         .mock_async(|when, then| {
             when.method(POST)
-                .path("/sap/bc/adt/programs/programs/Z_GOAT_TEST")
+                .path("/sap/bc/adt/programs/programs/z_goat_test")
                 .query_param("_action", "LOCK")
                 .query_param("accessMode", "MODIFY")
                 .header(
@@ -518,7 +518,7 @@ async fn program_lock_and_update_share_one_user_session() {
     let update_source = server
         .mock_async(|when, then| {
             when.method(PUT)
-                .path("/sap/bc/adt/programs/programs/Z_GOAT_TEST/source/main")
+                .path("/sap/bc/adt/programs/programs/z_goat_test/source/main")
                 .query_param("lockHandle", "LOCK-HANDLE-1")
                 .header("content-type", "text/plain; charset=utf-8")
                 .header("x-sap-adt-sessiontype", "stateful")
@@ -534,7 +534,7 @@ async fn program_lock_and_update_share_one_user_session() {
     let unlock_program = server
         .mock_async(|when, then| {
             when.method(POST)
-                .path("/sap/bc/adt/programs/programs/Z_GOAT_TEST")
+                .path("/sap/bc/adt/programs/programs/z_goat_test")
                 .query_param("_action", "UNLOCK")
                 .query_param("lockHandle", "LOCK-HANDLE-1")
                 .header("x-sap-adt-sessiontype", "stateful")

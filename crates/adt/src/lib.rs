@@ -16,8 +16,8 @@ pub mod transport;
 
 pub use api::discovery::{CoreDiscoveryQuery, DiscoveryQuery};
 pub use api::object::{
-    ObjectLock, ObjectSourceQuery, ObjectSourceUpdate, ObjectSourceUpdateBuilder,
-    ObjectSourceUpdateBuilderError, ObjectUnlock,
+    Lock, LockRequest, ObjectSourceQuery, ObjectSourceUpdate, ObjectSourceUpdateBuilder,
+    ObjectSourceUpdateBuilderError, UnlockRequest,
 };
 pub use api::programs::{
     IncludePropertiesQuery, ProgramPropertiesQuery, ProgramRun, ProgramRunBuilder,
@@ -39,8 +39,9 @@ pub use models::{
     SyntaxConfiguration, SyntaxLanguage, SystemInformationLink, TemplateLink, Workspace,
 };
 pub use objects::{
-    Include, IncludeRef, ObjectProperties, ObjectPropertiesQuery, ObjectRef, ObjectType,
-    ObjectVersion, Program, ProgramRef, RawObjectProperties, WorkbenchObject,
+    GlobalWorkbenchType, GlobalWorkbenchTypeParseError, Include, IncludeRef, ObjectNamePolicy,
+    ObjectProperties, ObjectPropertiesQuery, ObjectRef, ObjectType, ObjectVersion, Program,
+    ProgramRef,
 };
 pub use operation::{
     Conditional, Executor, IfNoneMatch, Operation, OperationKind, QueryMode, Stateful, Stateless,

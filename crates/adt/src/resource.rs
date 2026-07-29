@@ -2,7 +2,7 @@ use std::fmt;
 
 use url::Url;
 
-use crate::{AdtUri, AdtUriError, ObjectRef};
+use crate::{AdtUri, AdtUriError, GlobalWorkbenchType, ObjectRef};
 const LINK_RESOLUTION_ORIGIN: &str = "https://adt.invalid";
 
 /// A concrete link advertised by an ADT resource representation.
@@ -207,14 +207,14 @@ pub struct PackageRef {
     pub name: String,
 
     /// The repository object type, normally `DEVC/K`.
-    pub object_type: String,
+    pub object_type: GlobalWorkbenchType,
 
     /// The package's validated object reference.
     pub object: ObjectRef,
 }
 
 impl PackageRef {
-    pub(crate) fn new(name: String, object_type: String, object: ObjectRef) -> Self {
+    pub(crate) fn new(name: String, object_type: GlobalWorkbenchType, object: ObjectRef) -> Self {
         Self {
             name,
             object_type,

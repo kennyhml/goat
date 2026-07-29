@@ -1,10 +1,10 @@
 use serde::Deserialize;
 
 use crate::{
-    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, EntityTag, HtmlSourceRef,
-    Include, IncludeError, IncludeRef, NegotiableMediaVersion, ObjectRef, ObjectStateRef,
-    ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, Program, ProgramError, ProgramRef,
-    RawObjectProperties, SourceRef, SourceVersionsRef, TextElementsRef,
+    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, EntityTag, GlobalWorkbenchType,
+    HtmlSourceRef, Include, IncludeError, IncludeRef, NegotiableMediaVersion, ObjectProperties,
+    ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, Program,
+    ProgramError, ProgramRef, ResponseError, SourceRef, SourceVersionsRef, TextElementsRef,
     resource::{AdtLinkMetadata, resolve_href},
     vocabulary::{Relation, media_type},
 };
@@ -67,24 +67,33 @@ impl NegotiableMediaVersion for ProgramMediaVersion {
     }
 }
 
-impl TryFrom<RawObjectProperties<Program>> for ProgramProperties {
-    type Error = ProgramError;
+impl ObjectProperties for Program {
+    type MediaVersion = ProgramMediaVersion;
+    type Properties = ProgramProperties;
 
-    fn try_from(raw: RawObjectProperties<Program>) -> Result<Self, Self::Error> {
-        let RawObjectProperties {
-            resource,
-            version: media_version,
-            body,
-            etag,
-        } = raw;
-        let parsed: RawProgramProperties =
-            serde_xml_rs::from_reader(body.as_slice()).map_err(ProgramError::InvalidResponse)?;
-        let properties = ProgramPropertiesV3::from_raw(resource, parsed, etag)?;
-        Ok(match media_version.kind {
-            ProgramRepresentationKind::V2 => Self::V2(Box::new(properties)),
-            ProgramRepresentationKind::V3 => Self::V3(Box::new(properties)),
-        })
+    fn parse(
+        resource: &ProgramRef,
+        version: Self::MediaVersion,
+        body: Vec<u8>,
+        etag: Option<EntityTag>,
+    ) -> Result<Self::Properties, ResponseError> {
+        parse_program_properties(resource, version, &body, etag).map_err(Into::into)
     }
+}
+
+fn parse_program_properties(
+    resource: &ProgramRef,
+    media_version: ProgramMediaVersion,
+    body: &[u8],
+    etag: Option<EntityTag>,
+) -> Result<ProgramProperties, ProgramError> {
+    let parsed: RawProgramProperties =
+        serde_xml_rs::from_reader(body).map_err(ProgramError::InvalidResponse)?;
+    let properties = ProgramPropertiesV3::from_raw(resource.clone(), parsed, etag)?;
+    Ok(match media_version.kind {
+        ProgramRepresentationKind::V2 => ProgramProperties::V2(Box::new(properties)),
+        ProgramRepresentationKind::V3 => ProgramProperties::V3(Box::new(properties)),
+    })
 }
 
 /// Include properties tagged with the media-type version returned by SAP.
@@ -126,23 +135,32 @@ impl NegotiableMediaVersion for IncludeMediaVersion {
     }
 }
 
-impl TryFrom<RawObjectProperties<Include>> for IncludeProperties {
-    type Error = IncludeError;
+impl ObjectProperties for Include {
+    type MediaVersion = IncludeMediaVersion;
+    type Properties = IncludeProperties;
 
-    fn try_from(raw: RawObjectProperties<Include>) -> Result<Self, Self::Error> {
-        let RawObjectProperties {
-            resource,
-            version,
-            body,
-            etag,
-        } = raw;
-        let parsed: RawIncludeProperties =
-            serde_xml_rs::from_reader(body.as_slice()).map_err(IncludeError::InvalidResponse)?;
-        let properties = IncludePropertiesV2::from_raw(resource, parsed, etag)?;
-        Ok(match version {
-            IncludeMediaVersion::V2 => Self::V2(Box::new(properties)),
-        })
+    fn parse(
+        resource: &IncludeRef,
+        version: Self::MediaVersion,
+        body: Vec<u8>,
+        etag: Option<EntityTag>,
+    ) -> Result<Self::Properties, ResponseError> {
+        parse_include_properties(resource, version, &body, etag).map_err(Into::into)
     }
+}
+
+fn parse_include_properties(
+    resource: &IncludeRef,
+    version: IncludeMediaVersion,
+    body: &[u8],
+    etag: Option<EntityTag>,
+) -> Result<IncludeProperties, IncludeError> {
+    let parsed: RawIncludeProperties =
+        serde_xml_rs::from_reader(body).map_err(IncludeError::InvalidResponse)?;
+    let properties = IncludePropertiesV2::from_raw(resource.clone(), parsed, etag)?;
+    Ok(match version {
+        IncludeMediaVersion::V2 => IncludeProperties::V2(Box::new(properties)),
+    })
 }
 
 /// The plain-text console output produced by running an ABAP program.
@@ -180,7 +198,7 @@ pub struct ProgramPropertiesV3 {
     pub name: String,
 
     /// The repository object type, normally `PROG/P`.
-    pub object_type: String,
+    pub object_type: GlobalWorkbenchType,
 
     /// The timestamp at which the program was last changed.
     pub last_changed: String,
@@ -374,7 +392,7 @@ pub struct IncludePropertiesV2 {
     pub name: String,
 
     /// The repository object type, normally `PROG/I`.
-    pub object_type: String,
+    pub object_type: GlobalWorkbenchType,
 
     /// The timestamp at which the include was last changed.
     pub last_changed: String,
@@ -669,7 +687,7 @@ struct RawProgramProperties {
     #[serde(rename = "@adtcore:name")]
     name: String,
     #[serde(rename = "@adtcore:type")]
-    object_type: String,
+    object_type: GlobalWorkbenchType,
     #[serde(rename = "@adtcore:changedAt")]
     last_changed: String,
     #[serde(rename = "@adtcore:version")]
@@ -716,7 +734,7 @@ struct RawIncludeProperties {
     #[serde(rename = "@adtcore:name")]
     name: String,
     #[serde(rename = "@adtcore:type")]
-    object_type: String,
+    object_type: GlobalWorkbenchType,
     #[serde(rename = "@adtcore:changedAt")]
     last_changed: String,
     #[serde(rename = "@adtcore:version")]
@@ -766,7 +784,7 @@ struct RawPackage {
     #[serde(rename = "@adtcore:uri")]
     uri: String,
     #[serde(rename = "@adtcore:type")]
-    object_type: String,
+    object_type: GlobalWorkbenchType,
 }
 
 #[derive(Deserialize)]
@@ -811,15 +829,15 @@ mod tests {
     const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
 
     fn parse(body: &str) -> Result<ProgramPropertiesV3, ProgramError> {
-        let properties = ProgramProperties::try_from(RawObjectProperties {
-            resource: ProgramRef::for_test(
+        let properties = parse_program_properties(
+            &ProgramRef::for_test(
                 "Z_TEST",
                 crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
             ),
-            version: ProgramMediaVersion::V3,
-            body: body.as_bytes().to_vec(),
-            etag: Some(EntityTag::from_static("program-etag")),
-        })?;
+            ProgramMediaVersion::V3,
+            body.as_bytes(),
+            Some(EntityTag::from_static("program-etag")),
+        )?;
         Ok(match properties {
             ProgramProperties::V2(properties) | ProgramProperties::V3(properties) => *properties,
         })
@@ -855,19 +873,19 @@ mod tests {
             "ZTEST",
             crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
         );
-        let properties = IncludeProperties::try_from(RawObjectProperties {
-            resource: reference.clone(),
-            version: IncludeMediaVersion::V2,
-            body: INCLUDE_XML.as_bytes().to_vec(),
-            etag: Some(EntityTag::from_static("include-etag")),
-        })
+        let properties = parse_include_properties(
+            &reference,
+            IncludeMediaVersion::V2,
+            INCLUDE_XML.as_bytes(),
+            Some(EntityTag::from_static("include-etag")),
+        )
         .unwrap();
         let IncludeProperties::V2(include) = properties;
         let include = *include;
 
         assert_eq!(include.reference, reference);
         assert_eq!(include.name, "ZTEST");
-        assert_eq!(include.object_type, "PROG/I");
+        assert_eq!(include.object_type.to_string(), "PROG/I");
         assert_eq!(include.version, ObjectVersion::Active);
         assert_eq!(include.context_ref_count, 0);
         assert!(include.context_ref.is_none());
