@@ -7,15 +7,17 @@ use crate::{
     compatibility::CompatibilityError,
     error::ObjectError,
     uri::{AdtUri, AdtUriError},
-    vocabulary::{CategoryId, INCLUDES, PROGRAMS},
+    vocabulary::CategoryId,
 };
 
+mod capabilities;
 mod policies;
-mod properties;
+mod profiles;
 mod version;
 
+pub use capabilities::{Lock, ObjectProperties};
 pub use policies::ObjectNamePolicy;
-pub use properties::{ObjectProperties, ObjectPropertiesQuery};
+pub use profiles::{Include, Program};
 pub use version::ObjectVersion;
 
 pub(crate) mod private {
@@ -52,7 +54,8 @@ pub(crate) mod private {
 /// ADT serializes this pair with a slash, for example `PROG/P`, `PROG/I`, or
 /// `CLAS/OC`. Values use their unpadded wire representation rather than the
 /// trailing spaces of SAPs fixed-width `TROBJTYPE` and `SEU_OBJTYP` fields.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Deserialize)]
+#[serde(try_from = "String")]
 pub struct GlobalWorkbenchType {
     directory_type: Cow<'static, str>,
     workbench_type: Cow<'static, str>,
@@ -146,13 +149,11 @@ impl FromStr for GlobalWorkbenchType {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for GlobalWorkbenchType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
-        value.parse().map_err(serde::de::Error::custom)
+impl TryFrom<String> for GlobalWorkbenchType {
+    type Error = GlobalWorkbenchTypeParseError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
     }
 }
 
@@ -226,49 +227,6 @@ impl<T: ObjectType> ObjectRef<T> {
     /// Returns the canonical uppercase object name.
     pub fn name(&self) -> &str {
         &self.name
-    }
-}
-
-/// The ABAP program object type.
-#[derive(Debug)]
-pub enum Program {}
-
-impl ObjectType for Program {
-    const CATEGORY: CategoryId = PROGRAMS;
-    const TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("PROG", "P");
-    const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
-}
-
-/// The standalone ABAP include object type.
-#[derive(Debug)]
-pub enum Include {}
-
-impl ObjectType for Include {
-    const CATEGORY: CategoryId = INCLUDES;
-    const TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("PROG", "I");
-    const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(40);
-}
-
-/// A typed reference to an ABAP program.
-pub type ProgramRef = ObjectRef<Program>;
-
-/// A typed reference to a standalone ABAP include.
-pub type IncludeRef = ObjectRef<Include>;
-
-impl private::Sealed for Program {}
-impl private::Sealed for Include {}
-
-impl ObjectRef<Program> {
-    #[cfg(test)]
-    pub(crate) fn for_test(name: &str, uri: AdtUri) -> Self {
-        Self::typed(name.to_ascii_uppercase(), uri)
-    }
-}
-
-impl ObjectRef<Include> {
-    #[cfg(test)]
-    pub(crate) fn for_test(name: &str, uri: AdtUri) -> Self {
-        Self::typed(name.to_ascii_uppercase(), uri)
     }
 }
 

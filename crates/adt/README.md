@@ -140,9 +140,9 @@ execution capabilities:
 | --- | --- | --- |
 | `ObjectRef` | A type-erased repository-object identity and location, without implied capabilities | A validated `AdtUri`, a parsed URI, or an erased typed reference |
 | `ObjectRef<T>` | An object identity tagged with a static `ObjectType` marker | `Client<Discovered>::object::<T>(name)` |
-| `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable domain reference such as `ProgramRef` |
-| `ProgramRef` | Alias for `ObjectRef<Program>` | `Client<Discovered>::object::<Program>(name)` |
-| `IncludeRef` | Alias for `ObjectRef<Include>` | `Client<Discovered>::object::<Include>(name)` |
+| `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable reference such as `ObjectRef<Program>` |
+| `ObjectRef<Program>` | A typed ABAP program reference | `Client<Discovered>::object::<Program>(name)` |
+| `ObjectRef<Include>` | A typed standalone-include reference | `Client<Discovered>::object::<Include>(name)` |
 | `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources advertised by object representations | Fetched properties such as `ProgramProperties` |
 | `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
 
@@ -177,7 +177,7 @@ reject a `LockHandle` obtained for a different object before any request is sent
 
 ## Program properties
 
-`ProgramRef::query()` defaults to V3 before V2. Callers can replace that order;
+`ObjectRef<Program>::query()` defaults to V3 before V2. Callers can replace that order;
 the first preferred version advertised by central discovery is requested. V2
 and V3 use the same payload schema, exposed as `ProgramPropertiesV2` and
 `ProgramPropertiesV3` respectively (`ProgramPropertiesV2` is a type alias for
@@ -235,7 +235,7 @@ and SAP ETag metadata. Known relations also produce `SourceRef`,
 enhancement references, `ObjectStateRef`, and `ParserRef`. Bare relative,
 explicit `./`, root-relative, and query-bearing hrefs are resolved against the
 fetched program while their paths remain validated beneath `/sap/bc`.
-`ProgramRef::source()` remains the direct conventional `source/main` reference;
+`ObjectRef<Program>::source()` remains the direct conventional `source/main` reference;
 `ProgramPropertiesV3::source` is the location advertised by SAP.
 
 This conversion was verified against `Z_TEST` on the active A4H backend. V2
@@ -245,7 +245,7 @@ converted all relations listed above.
 
 ## Program execution
 
-`ProgramRef::run()` executes a program through the `programrun` URI template
+`ObjectRef<Program>::run()` executes a program through the `programrun` URI template
 advertised by central discovery and returns its rendered plain-text output:
 
 ```rust,ignore
@@ -296,7 +296,7 @@ object-version parameters, cache headers, and `200`/`304` handling.
 ## Object editing
 
 Object locking and source updates are generic stateful operations. A
-`ProgramRef` resolves its object and source resources from central discovery:
+`ObjectRef<Program>` resolves its object and source resources from central discovery:
 
 ```rust,ignore
 use goat_adt::{AccessMode, Operation, Program};
@@ -324,7 +324,7 @@ session.close().await?;
 When the owning resource is not otherwise needed, the equivalent lock-owned
 form is `lock_handle.remove().execute(&session).await?`.
 
-`ProgramRef::lock()` constructs an `ObjectLock` operation, while
+`ObjectRef<Program>::lock()` constructs a `LockRequest`, while
 `SourceRef::update()` seeds an `ObjectSourceUpdateBuilder` with its validated
 source. `ObjectLock` parses SAP's opaque `LOCK_HANDLE` into a `LockHandle`; the
 update builder rejects a handle obtained for another object. Future domain

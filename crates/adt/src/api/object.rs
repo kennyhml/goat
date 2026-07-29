@@ -1,13 +1,13 @@
 use derive_builder::Builder;
-use http::{Method, StatusCode, header};
+use http::{Method, StatusCode};
 
 use crate::{
     client::{Client, LoggedOnState},
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
-    objects::{Include, ObjectRef, ObjectType, Program, append_segments},
+    objects::{Include, Lock, ObjectRef, ObjectType, Program, append_segments},
     operation::{Operation, Stateful, Stateless},
-    protocol::{AdtRequest, AdtResponse, EntityTag},
+    protocol::{AdtRequest, AdtResponse},
     resource::SourceRef,
     vocabulary::{PostAction, media_type, query_parameter},
 };
@@ -35,10 +35,7 @@ impl<S: LoggedOnState> Operation<S> for ObjectSourceQuery {
 
     fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
         expect_ok(&response)?;
-        let etag = response
-            .headers()
-            .get(header::ETAG)
-            .and_then(EntityTag::from_header_value);
+        let etag = response.entity_tag();
         let content =
             String::from_utf8(response.into_body()).map_err(ObjectError::InvalidSourceEncoding)?;
         Ok(SourceCode::new(self.source.clone(), content, etag))
@@ -53,16 +50,6 @@ impl AccessMode {
         }
     }
 }
-
-/// Annotates an object type that supports locking and consequently also
-/// unlocking operations.
-///
-/// The created lock handle is bound to the [`ObjectRef`] it was created for.
-/// Trying to remove a lock from another object fails before a request is made.
-pub trait Lock: ObjectType {}
-
-impl Lock for Program {}
-impl Lock for Include {}
 
 impl<T: Lock> ObjectRef<T> {
     /// Creates an object-lock operation.
@@ -264,7 +251,7 @@ fn expect_ok(response: &AdtResponse) -> Result<(), ResponseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ProgramRef;
+    use crate::{ObjectRef, Program};
 
     #[test]
     fn object_operations_require_logon_but_not_discovery() {
@@ -278,7 +265,7 @@ mod tests {
 
     #[test]
     fn derives_the_conventional_source_from_a_program_reference() {
-        let program = ProgramRef::for_test(
+        let program = ObjectRef::<Program>::for_test(
             "ZPROGRAM",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZPROGRAM").unwrap(),
         );
@@ -291,11 +278,11 @@ mod tests {
 
     #[test]
     fn update_builder_rejects_a_lock_for_another_object() {
-        let first = ProgramRef::for_test(
+        let first = ObjectRef::<Program>::for_test(
             "ZFIRST",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZFIRST").unwrap(),
         );
-        let second = ProgramRef::for_test(
+        let second = ObjectRef::<Program>::for_test(
             "ZSECOND",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap(),
         );
@@ -314,11 +301,11 @@ mod tests {
 
     #[test]
     fn object_rejects_another_objects_lock_for_unlock() {
-        let first = ProgramRef::for_test(
+        let first = ObjectRef::<Program>::for_test(
             "ZFIRST",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZFIRST").unwrap(),
         );
-        let second = ProgramRef::for_test(
+        let second = ObjectRef::<Program>::for_test(
             "ZSECOND",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZSECOND").unwrap(),
         );

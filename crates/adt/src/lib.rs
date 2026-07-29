@@ -16,13 +16,14 @@ pub mod transport;
 
 pub use api::discovery::{CoreDiscoveryQuery, DiscoveryQuery};
 pub use api::object::{
-    Lock, LockRequest, ObjectSourceQuery, ObjectSourceUpdate, ObjectSourceUpdateBuilder,
+    LockRequest, ObjectSourceQuery, ObjectSourceUpdate, ObjectSourceUpdateBuilder,
     ObjectSourceUpdateBuilderError, UnlockRequest,
 };
 pub use api::programs::{
     IncludePropertiesQuery, ProgramPropertiesQuery, ProgramRun, ProgramRunBuilder,
     ProgramRunBuilderError,
 };
+pub use api::properties::ObjectPropertiesQuery;
 pub use api::session::{Logon, SessionMediaVersion};
 pub use client::{Client, ClientState, Discovered, LoggedOn, LoggedOnState, Unauthenticated};
 pub use compatibility::{CompatibilityError, NegotiableMediaVersion, negotiate};
@@ -39,9 +40,8 @@ pub use models::{
     SyntaxConfiguration, SyntaxLanguage, SystemInformationLink, TemplateLink, Workspace,
 };
 pub use objects::{
-    GlobalWorkbenchType, GlobalWorkbenchTypeParseError, Include, IncludeRef, ObjectNamePolicy,
-    ObjectProperties, ObjectPropertiesQuery, ObjectRef, ObjectType, ObjectVersion, Program,
-    ProgramRef,
+    GlobalWorkbenchType, GlobalWorkbenchTypeParseError, Include, Lock, ObjectNamePolicy,
+    ObjectProperties, ObjectRef, ObjectType, ObjectVersion, Program,
 };
 pub use operation::{
     Conditional, Executor, IfNoneMatch, Operation, OperationKind, QueryMode, Stateful, Stateless,

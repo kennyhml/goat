@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
+use super::properties::ObjectPropertiesQuery;
 use crate::{
     AdtUri, AdtUriError, CompatibilityError,
     client::{Client, Discovered},
     error::{OperationError, ProgramError, ResponseError},
     models::ProgramRunOutput,
-    objects::{Include, ObjectPropertiesQuery, ObjectRef, Program, ProgramRef},
+    objects::{Include, ObjectRef, Program},
     operation::{Operation, Stateless, Unconditional},
     protocol::{AdtRequest, AdtResponse},
     vocabulary::{PROGRAM_RUN, PROGRAM_RUN_RELATION, media_type, query_parameter},
@@ -41,7 +42,7 @@ pub type ProgramPropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<Progr
 #[readonly::make]
 pub struct ProgramRun {
     /// The executable program to run.
-    pub program: ProgramRef,
+    pub program: ObjectRef<Program>,
 
     /// An optional ABAP profiler trace identifier.
     #[builder(setter(strip_option), default)]
@@ -218,8 +219,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Conditional, EntityTag, IncludeMediaVersion, IncludeProperties, IncludeRef,
-        NegotiableMediaVersion, ProgramMediaVersion, ProgramProperties, vocabulary::PROGRAMS,
+        Conditional, EntityTag, IncludeMediaVersion, IncludeProperties, NegotiableMediaVersion,
+        ProgramMediaVersion, ProgramProperties, vocabulary::PROGRAMS,
     };
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
@@ -244,7 +245,7 @@ mod tests {
     }
 
     fn program_properties_query() -> ProgramPropertiesQuery {
-        ProgramRef::for_test(
+        ObjectRef::<Program>::for_test(
             "Z_TEST",
             crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
         )
@@ -263,7 +264,7 @@ mod tests {
     }
 
     fn include_properties_query() -> IncludePropertiesQuery {
-        IncludeRef::for_test(
+        ObjectRef::<Include>::for_test(
             "ZTEST",
             crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
         )
@@ -272,7 +273,7 @@ mod tests {
 
     fn program_run() -> ProgramRun {
         ProgramRunBuilder::default()
-            .program(ProgramRef::for_test(
+            .program(ObjectRef::<Program>::for_test(
                 "Z_TEST",
                 crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
             ))

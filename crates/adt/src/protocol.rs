@@ -32,7 +32,7 @@ impl EntityTag {
         &self.0
     }
 
-    pub(crate) fn from_header_value(value: &HeaderValue) -> Option<Self> {
+    fn from_header_value(value: &HeaderValue) -> Option<Self> {
         value.to_str().ok()?;
         Some(Self(value.clone()))
     }
@@ -215,6 +215,13 @@ impl AdtResponse {
         &self.body
     }
 
+    /// Returns the response entity tag when its header value is valid text.
+    pub fn entity_tag(&self) -> Option<EntityTag> {
+        self.headers
+            .get(header::ETAG)
+            .and_then(EntityTag::from_header_value)
+    }
+
     pub fn into_body(self) -> Vec<u8> {
         self.body
     }
@@ -231,5 +238,14 @@ mod tests {
             "safe-etag"
         );
         assert!(EntityTag::try_from("etag\r\ninjected: value").is_err());
+    }
+
+    #[test]
+    fn response_exposes_its_entity_tag() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ETAG, HeaderValue::from_static("response-etag"));
+        let response = AdtResponse::new(StatusCode::OK, headers, Vec::new());
+
+        assert_eq!(response.entity_tag().as_deref(), Some("response-etag"));
     }
 }

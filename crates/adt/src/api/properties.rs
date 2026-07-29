@@ -1,28 +1,14 @@
 use http::{Method, StatusCode, header};
 
-use super::{ObjectRef, ObjectType, ObjectVersion};
 use crate::{
     client::{Client, Discovered},
     compatibility::{CompatibilityError, NegotiableMediaVersion},
     error::{OperationError, ResponseError},
+    objects::{ObjectProperties, ObjectRef, ObjectVersion},
     operation::{IfNoneMatch, Operation, QueryMode, Stateless, Unconditional},
     protocol::{AdtRequest, AdtResponse, EntityTag},
     vocabulary::query_parameter,
 };
-
-/// Static metadata needed to fetch and decode an object's properties.
-#[doc(hidden)]
-pub trait ObjectProperties: ObjectType {
-    type MediaVersion: NegotiableMediaVersion;
-    type Properties: Send;
-
-    fn parse(
-        resource: &ObjectRef<Self>,
-        version: Self::MediaVersion,
-        body: Vec<u8>,
-        etag: Option<EntityTag>,
-    ) -> Result<Self::Properties, ResponseError>;
-}
 
 /// Fetches a versioned ADT object-properties representation.
 #[derive(Debug)]
@@ -116,7 +102,7 @@ where
         if response.status() == StatusCode::NOT_MODIFIED {
             return self
                 .mode
-                .not_modified(response_etag(&response))
+                .not_modified(response.entity_tag())
                 .ok_or(ResponseError::UnexpectedNotModified);
         }
         if response.status() != StatusCode::OK {
@@ -146,7 +132,7 @@ where
             });
         };
 
-        let etag = response_etag(&response);
+        let etag = response.entity_tag();
         let properties = self
             .resource
             .parse(media_version, response.into_body(), etag)?;
@@ -168,11 +154,4 @@ impl<T: ObjectProperties> ObjectRef<T> {
     pub fn query(&self) -> ObjectPropertiesQuery<T> {
         ObjectPropertiesQuery::new(self.clone())
     }
-}
-
-fn response_etag(response: &AdtResponse) -> Option<EntityTag> {
-    response
-        .headers()
-        .get(header::ETAG)
-        .and_then(EntityTag::from_header_value)
 }

@@ -90,9 +90,8 @@ application/vnd.sap.adt.oo.classes.v2+xml
 application/vnd.sap.adt.oo.classes+xml
 ```
 
-Class-specific types should include `Class`, the `ClassRef = ObjectRef<Class>`
-alias, `ClassMediaVersion`, `ClassProperties`, `ClassPropertiesRepresentation`,
-and `ClassError`.
+Class-specific types should include `Class`, `ClassMediaVersion`,
+`ClassProperties`, `ClassPropertiesRepresentation`, and `ClassError`.
 
 Class source and class execution are separate contracts:
 

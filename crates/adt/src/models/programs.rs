@@ -2,9 +2,9 @@ use serde::Deserialize;
 
 use crate::{
     AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, EntityTag, GlobalWorkbenchType,
-    HtmlSourceRef, Include, IncludeError, IncludeRef, NegotiableMediaVersion, ObjectProperties,
-    ObjectRef, ObjectStateRef, ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, Program,
-    ProgramError, ProgramRef, ResponseError, SourceRef, SourceVersionsRef, TextElementsRef,
+    HtmlSourceRef, Include, IncludeError, NegotiableMediaVersion, ObjectRef, ObjectStateRef,
+    ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, Program, ProgramError, SourceRef,
+    SourceVersionsRef, TextElementsRef,
     resource::{AdtLinkMetadata, resolve_href},
     vocabulary::{Relation, media_type},
 };
@@ -67,22 +67,8 @@ impl NegotiableMediaVersion for ProgramMediaVersion {
     }
 }
 
-impl ObjectProperties for Program {
-    type MediaVersion = ProgramMediaVersion;
-    type Properties = ProgramProperties;
-
-    fn parse(
-        resource: &ProgramRef,
-        version: Self::MediaVersion,
-        body: Vec<u8>,
-        etag: Option<EntityTag>,
-    ) -> Result<Self::Properties, ResponseError> {
-        parse_program_properties(resource, version, &body, etag).map_err(Into::into)
-    }
-}
-
-fn parse_program_properties(
-    resource: &ProgramRef,
+pub(crate) fn parse_program_properties(
+    resource: &ObjectRef<Program>,
     media_version: ProgramMediaVersion,
     body: &[u8],
     etag: Option<EntityTag>,
@@ -135,22 +121,8 @@ impl NegotiableMediaVersion for IncludeMediaVersion {
     }
 }
 
-impl ObjectProperties for Include {
-    type MediaVersion = IncludeMediaVersion;
-    type Properties = IncludeProperties;
-
-    fn parse(
-        resource: &IncludeRef,
-        version: Self::MediaVersion,
-        body: Vec<u8>,
-        etag: Option<EntityTag>,
-    ) -> Result<Self::Properties, ResponseError> {
-        parse_include_properties(resource, version, &body, etag).map_err(Into::into)
-    }
-}
-
-fn parse_include_properties(
-    resource: &IncludeRef,
+pub(crate) fn parse_include_properties(
+    resource: &ObjectRef<Include>,
     version: IncludeMediaVersion,
     body: &[u8],
     etag: Option<EntityTag>,
@@ -168,14 +140,14 @@ fn parse_include_properties(
 #[readonly::make]
 pub struct ProgramRunOutput {
     /// The program that was executed.
-    pub reference: ProgramRef,
+    pub reference: ObjectRef<Program>,
 
     /// The rendered program output returned by SAP.
     pub content: String,
 }
 
 impl ProgramRunOutput {
-    pub(crate) fn new(reference: ProgramRef, content: String) -> Self {
+    pub(crate) fn new(reference: ObjectRef<Program>, content: String) -> Self {
         Self { reference, content }
     }
 }
@@ -192,7 +164,7 @@ pub type ProgramPropertiesV2 = ProgramPropertiesV3;
 #[readonly::make]
 pub struct ProgramPropertiesV3 {
     /// The program resource that was fetched.
-    pub reference: ProgramRef,
+    pub reference: ObjectRef<Program>,
 
     /// The program name supplied by SAP.
     pub name: String,
@@ -287,7 +259,7 @@ pub struct ProgramPropertiesV3 {
 
 impl ProgramPropertiesV3 {
     fn from_raw(
-        reference: ProgramRef,
+        reference: ObjectRef<Program>,
         raw: RawProgramProperties,
         etag: Option<EntityTag>,
     ) -> Result<Self, ProgramError> {
@@ -386,7 +358,7 @@ impl ProgramPropertiesV3 {
 #[readonly::make]
 pub struct IncludePropertiesV2 {
     /// The include resource that was fetched.
-    pub reference: IncludeRef,
+    pub reference: ObjectRef<Include>,
 
     /// The include name supplied by SAP.
     pub name: String,
@@ -469,7 +441,7 @@ pub struct IncludePropertiesV2 {
 
 impl IncludePropertiesV2 {
     fn from_raw(
-        reference: IncludeRef,
+        reference: ObjectRef<Include>,
         raw: RawIncludeProperties,
         etag: Option<EntityTag>,
     ) -> Result<Self, IncludeError> {
@@ -830,7 +802,7 @@ mod tests {
 
     fn parse(body: &str) -> Result<ProgramPropertiesV3, ProgramError> {
         let properties = parse_program_properties(
-            &ProgramRef::for_test(
+            &ObjectRef::<Program>::for_test(
                 "Z_TEST",
                 crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
             ),
@@ -869,7 +841,7 @@ mod tests {
 
     #[test]
     fn parses_include_properties() {
-        let reference = IncludeRef::for_test(
+        let reference = ObjectRef::<Include>::for_test(
             "ZTEST",
             crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
         );
