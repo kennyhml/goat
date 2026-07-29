@@ -1,10 +1,10 @@
 [package]
-name = "goat-adt"
+name = "zadt"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "ADT protocol support for the goat ABAP tooling framework"
-repository = "https://github.com/kennyhml/goat"
+description = "ADT protocol support for the Ziege ABAP tooling framework"
+repository = "https://github.com/kennyhml/ziege"
 
 [features]
 default = ["reqwest"]

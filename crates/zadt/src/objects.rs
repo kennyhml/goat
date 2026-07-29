@@ -15,9 +15,9 @@ mod policies;
 mod profiles;
 mod version;
 
-pub use capabilities::{Lock, ObjectProperties};
+pub use capabilities::{Lock, ObjectProperties, Source};
 pub use policies::ObjectNamePolicy;
-pub use profiles::{Include, Program};
+pub use profiles::{Include, Package, Program};
 pub use version::ObjectVersion;
 
 pub(crate) mod private {
@@ -31,7 +31,7 @@ pub(crate) mod private {
 ///
 /// A repository object generally has an entry in the object directory (`TADIR`)
 /// with program ID `R3TR`. In contrast, `LIMU` identifies transportable
-/// subobjects recorded in transport requests; those subobjects generally do not
+/// subobjects recorded in transport requests - those subobjects generally do not
 /// have independent `TADIR` entries.
 ///
 /// The R3TR object type identifies the owning repository object family, such as
@@ -46,10 +46,10 @@ pub(crate) mod private {
 ///
 /// Much of this is an implementation detail. A global class has type `CLAS/OC`,
 /// while one of its method implementations has type `CLAS/OM`. The method source
-/// may be persisted in a generated include such as
-/// `ZCL_DEMO_A_SET_TO_PAID========CM001` in `REPOSRC`. That generated program is
-/// an include at the program-storage layer, but the method's Workbench subtype
-/// remains `OM` it is not exposed as subtype `I`, nor does it gain a `TADIR` entry.
+/// may be persisted in a generated include such as `ZCL_DEMO_A_SET_TO_PAID========CM001`
+/// in `REPOSRC`. That generated program is an include at the program-storage layer,
+/// but the method's Workbench subtype remains `OM` it is not exposed as subtype `I`,
+/// nor does it gain a `TADIR` entry.
 ///
 /// ADT serializes this pair with a slash, for example `PROG/P`, `PROG/I`, or
 /// `CLAS/OC`. Values use their unpadded wire representation rather than the
@@ -227,6 +227,13 @@ impl<T: ObjectType> ObjectRef<T> {
     /// Returns the canonical uppercase object name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub(crate) fn from_parts(name: String, uri: AdtUri) -> Result<Self, ObjectError> {
+        T::NAME_POLICY.validate(&name)?;
+
+        // TODO: Dont always uppercase!
+        Ok(Self::typed(name.to_ascii_uppercase(), uri))
     }
 }
 

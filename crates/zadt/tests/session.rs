@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use goat_adt::{Client, LogonError, OperationError, ReqwestTransport, ResponseError};
 use httpmock::prelude::*;
+use zadt::{Client, LogonError, OperationError, ReqwestTransport, ResponseError};
 
 const SESSION_XML: &str = include_str!("fixtures/http-session-v3.xml");
 const SESSION_MEDIA_TYPE: &str = "application/vnd.sap.adt.core.http.session.v3+xml";

@@ -1,6 +1,6 @@
-# goat-adt
+# zadt
 
-Typed SAP ABAP Development Tools protocol support for the `goat` framework.
+Typed SAP ABAP Development Tools protocol support for the Ziege framework.
 
 Cleaner rewrite of [adt-query](https://github.com/kennyhml/adt-query) to better make use of HATEOAS.
 
@@ -46,7 +46,7 @@ under `/sap/bc/adt/oo/classes/.../source/main`. These class and method names
 are useful when investigating server behavior, but they are SAP
 implementation details and may differ by release. The development diagnostic
 endpoints can also be unavailable or unauthorized on production systems.
-`goat-adt` depends on the discovery wire contract, not these implementation
+`zadt` depends on the discovery wire contract, not these implementation
 class names.
 
 ## Execution model
@@ -143,7 +143,9 @@ execution capabilities:
 | `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable reference such as `ObjectRef<Program>` |
 | `ObjectRef<Program>` | A typed ABAP program reference | `Client<Discovered>::object::<Program>(name)` |
 | `ObjectRef<Include>` | A typed standalone-include reference | `Client<Discovered>::object::<Include>(name)` |
-| `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources advertised by object representations | Fetched properties such as `ProgramProperties` |
+| `ObjectRef<Package>` | A typed ABAP package reference | An embedded package reference or `Client<Discovered>::object::<Package>(name)` |
+| `OwnedResourceRef<T>` | Shared owner and link metadata for a typed relation reference | Relation resolution |
+| `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources plus their owning object | Fetched properties such as `ProgramProperties` |
 | `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
 
 Object-type markers provide their statically known category, allowing a
@@ -156,7 +158,7 @@ let program = client.object::<Program>("ZDEMO")?;
 Constructing a reference performs no request. For a known object URI:
 
 ```rust
-use goat_adt::ObjectRef;
+use zadt::ObjectRef;
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
 let structure = ObjectRef::parse(
@@ -185,14 +187,14 @@ and V3 use the same payload schema, exposed as `ProgramPropertiesV2` and
 `ProgramProperties::V2` or `ProgramProperties::V3` variant:
 
 ```rust,ignore
-use goat_adt::{
-    ObjectVersion, Operation, Program, ProgramMediaVersion, ProgramProperties,
+use zadt::{
+    ObjectVersion, Operation, Program, ProgramProperties, ProgramPropertiesVersion,
 };
 
 let reference = client.object::<Program>("ZDEMO")?;
 let response = reference
     .query()
-    .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
+    .priority([ProgramPropertiesVersion::V2, ProgramPropertiesVersion::V3])
     .version(ObjectVersion::WorkingArea)
     .execute(&client)
     .await?;
@@ -206,7 +208,7 @@ let source = properties.source.query().execute(&client).await?;
 
 assert_eq!(properties.package.name, "$TMP");
 assert_eq!(properties.syntax_configuration.language.version, "X");
-println!("text elements: {:?}", properties.text_elements);
+println!("text elements: {:?}", properties.text_elements()?);
 println!("{}", source.content);
 ```
 
@@ -227,14 +229,17 @@ parameter and `CL_ADT_UTILITY->GET_WB_VERSION` maps it to the Workbench's
 one-character `R3STATE`. Transient requests such as `WorkingArea` can therefore
 produce a returned `ProgramPropertiesV3::version` of `Active` or `Inactive`.
 
-The private Atom parser resolves every advertised link and retains it in
-`ProgramPropertiesV3::links` or the nested `SyntaxLanguage::links`. This preserves unknown
-relations alongside `rel`, media type, title, language, length, query, fragment,
-and SAP ETag metadata. Known relations also produce `SourceRef`,
-`HtmlSourceRef`, `SourceVersionsRef`, `ObjectStructureRef`, `TextElementsRef`,
-enhancement references, `ObjectStateRef`, and `ParserRef`. Bare relative,
-explicit `./`, root-relative, and query-bearing hrefs are resolved against the
-fetched program while their paths remain validated beneath `/sap/bc`.
+The private Atom parser retains advertised links without resolving every target
+up front. `ProgramPropertiesV3::relations()` and the nested
+`SyntaxLanguage::relations()` preserve unknown relations alongside `rel`, media
+type, title, language, length, query, fragment, and SAP ETag metadata. Their
+iterators resolve links on demand, while typed accessors produce `HtmlSourceRef`,
+`SourceVersionsRef`, `ObjectStructureRef`, `TextElementsRef`, enhancement
+references, `ObjectStateRef`, and `ParserRef`. The required plain-text
+`SourceRef` remains eagerly validated as part of the properties representation.
+Bare relative, explicit `./`, root-relative, and query-bearing hrefs are resolved
+against the fetched program while their paths remain validated beneath
+`/sap/bc`.
 `ObjectRef<Program>::source()` remains the direct conventional `source/main` reference;
 `ProgramPropertiesV3::source` is the location advertised by SAP.
 
@@ -249,7 +254,7 @@ converted all relations listed above.
 advertised by central discovery and returns its rendered plain-text output:
 
 ```rust,ignore
-use goat_adt::{Operation, Program};
+use zadt::{Operation, Program};
 
 let program = client.object::<Program>("ZDEMO")?;
 let output = program.run().build()?.execute(&client).await?;
@@ -269,7 +274,7 @@ collection and V2 representation. Resolution and media negotiation follow the
 same split as programs:
 
 ```rust,ignore
-use goat_adt::{Include, IncludeProperties, ObjectVersion, Operation};
+use zadt::{Include, IncludeProperties, ObjectVersion, Operation};
 
 let reference = client.object::<Include>("ZINCLUDE")?;
 let response = reference
@@ -299,7 +304,7 @@ Object locking and source updates are generic stateful operations. A
 `ObjectRef<Program>` resolves its object and source resources from central discovery:
 
 ```rust,ignore
-use goat_adt::{AccessMode, Operation, Program};
+use zadt::{AccessMode, Operation, Program};
 
 let session = client.create_user_session();
 let program = client.object::<Program>("ZDEMO")?;

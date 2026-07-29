@@ -3,7 +3,9 @@ use std::{error::Error as StdError, fmt};
 use http::StatusCode;
 use thiserror::Error;
 
-use crate::{AdtUriError, CategoryId, CompatibilityError};
+use crate::{
+    AdtUriError, CategoryId, CompatibilityError, GlobalWorkbenchType, resource::AdtLinkError,
+};
 
 #[cfg(feature = "reqwest")]
 #[derive(Debug, Error)]
@@ -81,79 +83,6 @@ pub enum LogonError {
     },
 }
 
-/// An error resolving or decoding a program resource.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum ProgramError {
-    #[error(transparent)]
-    Compatibility(#[from] CompatibilityError),
-
-    #[error("the program-run collection did not advertise its execution template")]
-    MissingRunTemplate,
-
-    #[error("the program-run template does not support profiling")]
-    UnsupportedProfiler,
-
-    #[error("invalid program-run template `{template}`: {reason}")]
-    InvalidRunTemplate { template: String, reason: String },
-
-    #[error("program-run template expanded to invalid target `{target}`: {source}")]
-    InvalidRunTarget { target: String, source: AdtUriError },
-
-    #[error("program-run response was not valid UTF-8: {0}")]
-    InvalidRunOutputEncoding(#[source] std::string::FromUtf8Error),
-
-    #[error("invalid program XML: {0}")]
-    InvalidResponse(#[source] serde_xml_rs::Error),
-
-    #[error("program link `{href}` could not be resolved: {source}")]
-    InvalidLink { href: String, source: AdtUriError },
-
-    #[error("program package URI `{uri}` is invalid: {source}")]
-    InvalidPackageUri { uri: String, source: AdtUriError },
-
-    #[error("program response did not advertise a plain-text source link")]
-    MissingSourceLink,
-
-    #[error("unsupported program object version `{version}`")]
-    UnsupportedObjectVersion { version: String },
-
-    #[error("program source attribute `{declared}` disagrees with source relation `{advertised}`")]
-    SourceLinkMismatch {
-        declared: String,
-        advertised: String,
-    },
-}
-
-/// An error resolving or decoding an ABAP include resource.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum IncludeError {
-    #[error("invalid include XML: {0}")]
-    InvalidResponse(#[source] serde_xml_rs::Error),
-
-    #[error("include link `{href}` could not be resolved: {source}")]
-    InvalidLink { href: String, source: AdtUriError },
-
-    #[error("include package URI `{uri}` is invalid: {source}")]
-    InvalidPackageUri { uri: String, source: AdtUriError },
-
-    #[error("include context URI `{uri}` is invalid: {source}")]
-    InvalidContextUri { uri: String, source: AdtUriError },
-
-    #[error("include response did not advertise a plain-text source link")]
-    MissingSourceLink,
-
-    #[error("unsupported include object version `{version}`")]
-    UnsupportedObjectVersion { version: String },
-
-    #[error("include source attribute `{declared}` disagrees with source relation `{advertised}`")]
-    SourceLinkMismatch {
-        declared: String,
-        advertised: String,
-    },
-}
-
 /// An error in a generic ADT object operation or representation.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -170,17 +99,63 @@ pub enum ObjectError {
     #[error("could not construct the object resource URI: {0}")]
     InvalidTarget(#[from] AdtUriError),
 
+    #[error("invalid object representation: {0}")]
+    InvalidResponse(#[source] serde_xml_rs::Error),
+
+    #[error("object link `{href}` could not be resolved: {source}")]
+    InvalidLink { href: String, source: AdtUriError },
+
+    #[error("object response did not advertise the required `{relation}` relation")]
+    MissingRelation { relation: &'static str },
+
+    #[error("unsupported object version `{version}`")]
+    UnsupportedObjectVersion { version: String },
+
+    #[error(
+        "object `{relation}` reference `{declared}` disagrees with advertised relation `{advertised}`"
+    )]
+    RelationMismatch {
+        relation: &'static str,
+        declared: String,
+        advertised: String,
+    },
+
+    #[error("expected object type `{expected}`, but the response advertised `{actual}`")]
+    UnexpectedObjectType {
+        expected: GlobalWorkbenchType,
+        actual: GlobalWorkbenchType,
+    },
+
+    #[error("the `{relation}` operation template was not advertised")]
+    MissingTemplate { relation: &'static str },
+
+    #[error("the operation template does not support `{parameter}`")]
+    UnsupportedTemplateParameter { parameter: &'static str },
+
+    #[error("invalid operation template `{template}`: {reason}")]
+    InvalidTemplate { template: String, reason: String },
+
+    #[error("operation template expanded to invalid target `{target}`: {source}")]
+    InvalidExpandedTarget { target: String, source: AdtUriError },
+
     #[error("invalid object lock response: {0}")]
     InvalidLockResponse(#[from] serde_xml_rs::Error),
 
     #[error("object lock response did not contain a lock handle")]
     MissingLockHandle,
 
-    #[error("source response was not valid UTF-8: {0}")]
-    InvalidSourceEncoding(#[from] std::string::FromUtf8Error),
+    #[error("object response was not valid UTF-8: {0}")]
+    InvalidResponseEncoding(#[from] std::string::FromUtf8Error),
 
     #[error("lock for `{actual}` cannot be used with object `{expected}`")]
     LockHandleObjectMismatch { expected: String, actual: String },
+}
+
+impl From<AdtLinkError> for ObjectError {
+    fn from(error: AdtLinkError) -> Self {
+        let (href, source) = error.into_parts();
+        Self::InvalidLink { href, source }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -212,12 +187,6 @@ pub enum ResponseError {
 
     #[error(transparent)]
     Object(#[from] ObjectError),
-
-    #[error(transparent)]
-    Program(#[from] ProgramError),
-
-    #[error(transparent)]
-    Include(#[from] IncludeError),
 }
 
 #[derive(Debug, Error)]

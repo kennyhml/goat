@@ -5,7 +5,7 @@ use crate::{
     client::{Client, LoggedOnState},
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
-    objects::{Include, Lock, ObjectRef, ObjectType, Program, append_segments},
+    objects::{Lock, ObjectRef, Source, append_segments},
     operation::{Operation, Stateful, Stateless},
     protocol::{AdtRequest, AdtResponse},
     resource::SourceRef,
@@ -36,8 +36,8 @@ impl<S: LoggedOnState> Operation<S> for ObjectSourceQuery {
     fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
         expect_ok(&response)?;
         let etag = response.entity_tag();
-        let content =
-            String::from_utf8(response.into_body()).map_err(ObjectError::InvalidSourceEncoding)?;
+        let content = String::from_utf8(response.into_body())
+            .map_err(ObjectError::InvalidResponseEncoding)?;
         Ok(SourceCode::new(self.source.clone(), content, etag))
     }
 }
@@ -69,17 +69,12 @@ impl<T: Lock> ObjectRef<T> {
     }
 }
 
-impl ObjectRef<Program> {
-    /// Returns the program's conventional `source/main` resource.
+impl<T: Source> ObjectRef<T> {
+    /// Returns the objects conventional source resource.
     pub fn source(&self) -> SourceRef {
-        conventional_source(self)
-    }
-}
-
-impl ObjectRef<Include> {
-    /// Returns the include's conventional `source/main` resource.
-    pub fn source(&self) -> SourceRef {
-        conventional_source(self)
+        let uri = append_segments(self.uri(), T::PATH)
+            .expect("static source path segments form a valid ADT URI");
+        SourceRef::new(self.erase(), uri)
     }
 }
 
@@ -229,12 +224,6 @@ impl SourceRef {
         builder.source(self.clone());
         builder
     }
-}
-
-fn conventional_source<T: ObjectType>(object: &ObjectRef<T>) -> SourceRef {
-    let uri = append_segments(object.uri(), ["source", "main"])
-        .expect("static source path segments form a valid ADT URI");
-    SourceRef::new(object.erase(), uri)
 }
 
 fn expect_ok(response: &AdtResponse) -> Result<(), ResponseError> {

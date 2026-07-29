@@ -30,18 +30,18 @@ pub use compatibility::{CompatibilityError, NegotiableMediaVersion, negotiate};
 #[cfg(feature = "reqwest")]
 pub use error::ReqwestTransportBuildError;
 pub use error::{
-    DiscoveryError, IncludeError, LogonError, ObjectError, OperationError, ProgramError,
-    ResponseError, TransportError,
+    DiscoveryError, LogonError, ObjectError, OperationError, ResponseError, TransportError,
 };
 pub use models::{
-    AccessMode, Capabilities, Category, Collection, IncludeMediaVersion, IncludeProperties,
-    IncludePropertiesV2, LockHandle, ProgramMediaVersion, ProgramProperties, ProgramPropertiesV2,
-    ProgramPropertiesV3, ProgramRunOutput, SessionInformation, SessionUri, SourceCode,
-    SyntaxConfiguration, SyntaxLanguage, SystemInformationLink, TemplateLink, Workspace,
+    AccessMode, Capabilities, Category, Collection, IncludeProperties, IncludePropertiesV2,
+    IncludePropertyVersion, LockHandle, ProgramProperties, ProgramPropertiesV2,
+    ProgramPropertiesV3, ProgramPropertiesVersion, ProgramRunResult, SessionInformation,
+    SessionUri, SourceCode, SyntaxConfiguration, SyntaxLanguage, SystemInformationLink,
+    TemplateLink, Workspace,
 };
 pub use objects::{
     GlobalWorkbenchType, GlobalWorkbenchTypeParseError, Include, Lock, ObjectNamePolicy,
-    ObjectProperties, ObjectRef, ObjectType, ObjectVersion, Program,
+    ObjectProperties, ObjectRef, ObjectType, ObjectVersion, Package, Program, Source,
 };
 pub use operation::{
     Conditional, Executor, IfNoneMatch, Operation, OperationKind, QueryMode, Stateful, Stateless,
@@ -49,8 +49,9 @@ pub use operation::{
 };
 pub use protocol::{AdtRequest, AdtResponse, EntityTag};
 pub use resource::{
-    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, HtmlSourceRef, ObjectStateRef,
-    ObjectStructureRef, PackageRef, ParserRef, SourceRef, SourceVersionsRef, TextElementsRef,
+    AdtLink, AdtLinkError, EnhancementImplementationsRef, HtmlSourceRef,
+    ObjectEnhancementOptionsRef, ObjectStateRef, ObjectStructureRef, OwnedResourceRef, ParserRef,
+    Relations, SourceEnhancementOptionsRef, SourceRef, SourceVersionsRef, TextElementsRef,
 };
 pub use transport::Transport;
 #[cfg(feature = "reqwest")]

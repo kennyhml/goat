@@ -4,8 +4,8 @@ use super::properties::ObjectPropertiesQuery;
 use crate::{
     AdtUri, AdtUriError, CompatibilityError,
     client::{Client, Discovered},
-    error::{OperationError, ProgramError, ResponseError},
-    models::ProgramRunOutput,
+    error::{ObjectError, OperationError, ResponseError},
+    models::ProgramRunResult,
     objects::{Include, ObjectRef, Program},
     operation::{Operation, Stateless, Unconditional},
     protocol::{AdtRequest, AdtResponse},
@@ -50,7 +50,7 @@ pub struct ProgramRun {
 }
 
 impl Operation<Discovered> for ProgramRun {
-    type Response = ProgramRunOutput;
+    type Response = ProgramRunResult;
     type Kind = Stateless;
 
     fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
@@ -58,7 +58,7 @@ impl Operation<Discovered> for ProgramRun {
         let uri_name = self.program.name().to_ascii_lowercase();
         let (target, query) =
             expand_program_run_target(template, &uri_name, self.profiler_id.as_deref())
-                .map_err(program_operation_error)?;
+                .map_err(object_operation_error)?;
         let mut request = AdtRequest::new(Method::POST, target);
         for (name, value) in query {
             request.push_query(name, value);
@@ -75,8 +75,8 @@ impl Operation<Discovered> for ProgramRun {
             });
         }
         let content = String::from_utf8(response.into_body())
-            .map_err(ProgramError::InvalidRunOutputEncoding)?;
-        Ok(ProgramRunOutput::new(self.program.clone(), content))
+            .map_err(ObjectError::InvalidResponseEncoding)?;
+        Ok(ProgramRunResult::new(self.program.clone(), content))
     }
 }
 
@@ -102,23 +102,27 @@ fn program_run_template(client: &Client<Discovered>) -> Result<&str, OperationEr
         .iter()
         .find(|link| link.relation() == PROGRAM_RUN_RELATION)
         .map(|link| link.template())
-        .ok_or(ProgramError::MissingRunTemplate)
-        .map_err(program_operation_error)
+        .ok_or(ObjectError::MissingTemplate {
+            relation: PROGRAM_RUN_RELATION,
+        })
+        .map_err(object_operation_error)
 }
 
 fn expand_program_run_target(
     template: &str,
     program_name: &str,
     profiler_id: Option<&str>,
-) -> Result<(AdtUri, Vec<(String, String)>), ProgramError> {
+) -> Result<(AdtUri, Vec<(String, String)>), ObjectError> {
     if !template_has_variable(template, PROGRAM_NAME_VARIABLE) {
-        return Err(ProgramError::InvalidRunTemplate {
+        return Err(ObjectError::InvalidTemplate {
             template: template.to_owned(),
             reason: format!("missing `{PROGRAM_NAME_VARIABLE}` variable"),
         });
     }
     if profiler_id.is_some() && !template_has_variable(template, query_parameter::PROFILER_ID) {
-        return Err(ProgramError::UnsupportedProfiler);
+        return Err(ObjectError::UnsupportedTemplateParameter {
+            parameter: query_parameter::PROFILER_ID,
+        });
     }
 
     let mut variables = HashMap::from([(
@@ -132,12 +136,12 @@ fn expand_program_run_target(
         );
     }
     let expanded = stduritemplate::expand(template, &variables).map_err(|error| {
-        ProgramError::InvalidRunTemplate {
+        ObjectError::InvalidTemplate {
             template: template.to_owned(),
             reason: error.to_string(),
         }
     })?;
-    parse_program_run_target(&expanded).map_err(|source| ProgramError::InvalidRunTarget {
+    parse_program_run_target(&expanded).map_err(|source| ObjectError::InvalidExpandedTarget {
         target: expanded,
         source,
     })
@@ -208,8 +212,8 @@ fn parse_program_run_target(
     Ok((target, query))
 }
 
-fn program_operation_error(error: ProgramError) -> OperationError {
-    OperationError::Response(ResponseError::Program(error))
+fn object_operation_error(error: ObjectError) -> OperationError {
+    OperationError::Response(ResponseError::Object(error))
 }
 
 #[cfg(test)]
@@ -219,8 +223,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Conditional, EntityTag, IncludeMediaVersion, IncludeProperties, NegotiableMediaVersion,
-        ProgramMediaVersion, ProgramProperties, vocabulary::PROGRAMS,
+        Conditional, EntityTag, IncludeProperties, IncludePropertyVersion, NegotiableMediaVersion,
+        ProgramProperties, ProgramPropertiesVersion, vocabulary::PROGRAMS,
     };
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
@@ -252,7 +256,7 @@ mod tests {
         .query()
     }
 
-    fn program_properties_response(representation: ProgramMediaVersion) -> AdtResponse {
+    fn program_properties_response(representation: ProgramPropertiesVersion) -> AdtResponse {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::CONTENT_TYPE,
@@ -285,7 +289,7 @@ mod tests {
     fn include_properties_query_defaults_to_v2() {
         assert_eq!(
             include_properties_query().priority,
-            [IncludeMediaVersion::V2]
+            [IncludePropertyVersion::V2]
         );
     }
 
@@ -326,7 +330,11 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, ProgramError::UnsupportedProfiler));
+        assert!(matches!(
+            error,
+            ObjectError::UnsupportedTemplateParameter { parameter }
+                if parameter == query_parameter::PROFILER_ID
+        ));
     }
 
     #[test]
@@ -336,7 +344,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ResponseError::Program(ProgramError::InvalidRunOutputEncoding(_))
+            ResponseError::Object(ObjectError::InvalidResponseEncoding(_))
         ));
     }
 
@@ -375,14 +383,16 @@ mod tests {
 
         assert!(matches!(
             error,
-            OperationError::Response(ResponseError::Program(ProgramError::MissingRunTemplate))
+            OperationError::Response(ResponseError::Object(ObjectError::MissingTemplate {
+                relation: PROGRAM_RUN_RELATION
+            }))
         ));
     }
 
     #[test]
     fn tags_a_v2_program_properties_representation() {
         let representation = program_properties_query()
-            .decode(program_properties_response(ProgramMediaVersion::V2))
+            .decode(program_properties_response(ProgramPropertiesVersion::V2))
             .unwrap();
         assert!(matches!(representation, ProgramProperties::V2(_)));
     }
@@ -390,7 +400,7 @@ mod tests {
     #[test]
     fn tags_a_v3_program_properties_representation() {
         let representation = program_properties_query()
-            .decode(program_properties_response(ProgramMediaVersion::V3))
+            .decode(program_properties_response(ProgramPropertiesVersion::V3))
             .unwrap();
         assert!(matches!(representation, ProgramProperties::V3(_)));
     }
@@ -431,8 +441,8 @@ mod tests {
             } if category == PROGRAMS
                 && content_type == "application/json"
                 && supported == [
-                    ProgramMediaVersion::V3.media_type(),
-                    ProgramMediaVersion::V2.media_type(),
+                    ProgramPropertiesVersion::V3.media_type(),
+                    ProgramPropertiesVersion::V2.media_type(),
                 ]
         ));
     }
@@ -441,7 +451,7 @@ mod tests {
     fn wraps_a_modified_conditional_program_properties_query() {
         let response = program_properties_query()
             .if_none_match(EntityTag::from_static("old-etag"))
-            .decode(program_properties_response(ProgramMediaVersion::V3))
+            .decode(program_properties_response(ProgramPropertiesVersion::V3))
             .unwrap();
 
         assert!(matches!(

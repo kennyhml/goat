@@ -1,15 +1,35 @@
 use super::{
-    GlobalWorkbenchType, Lock, ObjectNamePolicy, ObjectProperties, ObjectRef, ObjectType, private,
+    GlobalWorkbenchType, Lock, ObjectNamePolicy, ObjectProperties, ObjectRef, ObjectType, Source,
+    private,
 };
 use crate::{
     error::ResponseError,
     models::{
-        IncludeMediaVersion, IncludeProperties, ProgramMediaVersion, ProgramProperties,
-        parse_include_properties, parse_program_properties,
+        IncludeProperties, IncludePropertyVersion, ProgramProperties, ProgramPropertiesVersion,
     },
     protocol::EntityTag,
     vocabulary::{CategoryId, INCLUDES, PROGRAMS},
 };
+
+impl private::Sealed for Package {}
+impl private::Sealed for Program {}
+impl private::Sealed for Include {}
+
+/// The package (devclass) object type.
+#[derive(Debug)]
+pub enum Package {}
+
+impl ObjectType for Package {
+    const CATEGORY: CategoryId = CategoryId {
+        scheme: "http://www.sap.com/wbobj/packages",
+        term: "devck",
+    };
+    const TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("DEVC", "K");
+    const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
+}
+
+impl Lock for Package {}
+// TODO: package object properties
 
 /// The ABAP program object type.
 #[derive(Debug)]
@@ -22,9 +42,10 @@ impl ObjectType for Program {
 }
 
 impl Lock for Program {}
+impl Source for Program {}
 
 impl ObjectProperties for Program {
-    type MediaVersion = ProgramMediaVersion;
+    type MediaVersion = ProgramPropertiesVersion;
     type Properties = ProgramProperties;
 
     fn parse(
@@ -33,7 +54,7 @@ impl ObjectProperties for Program {
         body: Vec<u8>,
         etag: Option<EntityTag>,
     ) -> Result<Self::Properties, ResponseError> {
-        parse_program_properties(resource, version, &body, etag).map_err(Into::into)
+        ProgramProperties::parse(resource, version, &body, etag)
     }
 }
 
@@ -48,9 +69,10 @@ impl ObjectType for Include {
 }
 
 impl Lock for Include {}
+impl Source for Include {}
 
 impl ObjectProperties for Include {
-    type MediaVersion = IncludeMediaVersion;
+    type MediaVersion = IncludePropertyVersion;
     type Properties = IncludeProperties;
 
     fn parse(
@@ -59,12 +81,9 @@ impl ObjectProperties for Include {
         body: Vec<u8>,
         etag: Option<EntityTag>,
     ) -> Result<Self::Properties, ResponseError> {
-        parse_include_properties(resource, version, &body, etag).map_err(Into::into)
+        IncludeProperties::parse(resource, version, &body, etag)
     }
 }
-
-impl private::Sealed for Program {}
-impl private::Sealed for Include {}
 
 impl ObjectRef<Program> {
     #[cfg(test)]

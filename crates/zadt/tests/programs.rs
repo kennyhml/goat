@@ -1,11 +1,12 @@
 #![cfg(feature = "reqwest")]
 
-use goat_adt::{
-    AccessMode, Client, Conditional, EntityTag, Include, IncludeMediaVersion, IncludeProperties,
-    ObjectVersion, Operation, Program, ProgramMediaVersion, ProgramProperties, ReqwestTransport,
-};
 use httpmock::Mock;
 use httpmock::prelude::*;
+use zadt::{
+    AccessMode, Client, Conditional, EntityTag, Include, IncludeProperties, IncludePropertyVersion,
+    ObjectType, ObjectVersion, Operation, Package, Program, ProgramProperties,
+    ProgramPropertiesVersion, ReqwestTransport,
+};
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
 const LOCK_XML: &str = include_str!("fixtures/object-lock.xml");
@@ -14,7 +15,7 @@ const PROGRAM_XML: &str = include_str!("fixtures/program-z-test.xml");
 const INCLUDE_XML: &str = include_str!("fixtures/include-ztest.xml");
 const SESSION_XML: &str = include_str!("fixtures/http-session-v3.xml");
 const SESSION_MEDIA_TYPE: &str = "application/vnd.sap.adt.core.http.session.v3+xml";
-const SOURCE: &str = "REPORT z_goat_test.\nWRITE / 'updated'.\n";
+const SOURCE: &str = "REPORT z_ziege_test.\nWRITE / 'updated'.\n";
 const RUN_OUTPUT: &str = "Hello from Z_TEST\n";
 
 async fn mock_logon(server: &MockServer) -> Mock<'_> {
@@ -146,12 +147,12 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
     let reference = client.object::<Include>("ZTEST").unwrap();
     let response = reference
         .query()
-        .priority([IncludeMediaVersion::V2])
+        .priority([IncludePropertyVersion::V2])
         .version(ObjectVersion::Active)
         .execute(&client)
         .await
         .unwrap();
-    assert_eq!(response.media_version(), IncludeMediaVersion::V2);
+    assert_eq!(response.media_version(), IncludePropertyVersion::V2);
     let include = match response {
         IncludeProperties::V2(include) => *include,
         _ => panic!("unexpected include-properties version"),
@@ -163,8 +164,8 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
     assert_eq!(include.object_type.to_string(), "PROG/I");
     assert_eq!(include.version, ObjectVersion::Active);
     assert_eq!(include.context_ref_count, 0);
-    assert_eq!(include.package.name, "$TMP");
-    assert_eq!(include.links.len(), 7);
+    assert_eq!(include.package.name(), "$TMP");
+    assert_eq!(include.relations().len(), 7);
     assert_eq!(include.etag.as_deref(), Some("2026012416174900180"));
     assert_eq!(source.content, SOURCE);
 
@@ -226,7 +227,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
         .unwrap();
     let reference = client.object::<Program>("Z_TEST").unwrap();
     let response = reference.query().execute(&client).await.unwrap();
-    assert_eq!(response.media_version(), ProgramMediaVersion::V3);
+    assert_eq!(response.media_version(), ProgramPropertiesVersion::V3);
     let program = match response {
         ProgramProperties::V3(program) => *program,
         _ => panic!("unexpected program-properties version"),
@@ -240,10 +241,10 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     assert_eq!(program.program_type, "executableProgram");
     assert!(program.fix_point_arithmetic);
     assert!(program.unicode_check_active);
-    assert_eq!(program.package.name, "$TMP");
-    assert_eq!(program.package.object_type.to_string(), "DEVC/K");
+    assert_eq!(program.package.name(), "$TMP");
+    assert_eq!(Package::TYPE.to_string(), "DEVC/K");
     assert_eq!(
-        program.package.object.uri().as_str(),
+        program.package.uri().as_str(),
         "/sap/bc/adt/packages/%24tmp"
     );
     assert_eq!(program.syntax_configuration.language.version, "X");
@@ -251,9 +252,13 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
         program.syntax_configuration.language.description,
         "Standard ABAP"
     );
-    assert_eq!(program.links.len(), 9);
-    let text_elements_link = program
-        .links
+    assert_eq!(program.relations().len(), 9);
+    let links = program
+        .relations()
+        .iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let text_elements_link = links
         .iter()
         .find(|link| {
             link.relation.as_deref()
@@ -265,7 +270,14 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
         text_elements_link.target.as_str(),
         "/sap/bc/adt/textelements/programs/z_test"
     );
-    let parser_link = &program.syntax_configuration.language.links[0];
+    let syntax_links = program
+        .syntax_configuration
+        .language
+        .relations()
+        .iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let parser_link = &syntax_links[0];
     assert_eq!(
         parser_link.relation.as_deref(),
         Some("http://www.sap.com/adt/relations/abapsource/parser")
@@ -277,57 +289,57 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
         program.source.uri.as_str(),
         "/sap/bc/adt/programs/programs/z_test/source/main"
     );
+    assert_eq!(program.source.object, reference.erase());
     assert!(program.source.query.is_empty());
     assert_eq!(program.source.etag.as_deref(), Some("202607251959580001"));
     assert_eq!(program.etag.as_deref(), Some("202607251959580008"));
+    let html_source = program.html_source().unwrap().unwrap();
+    assert_eq!(html_source.object, reference.erase());
+    assert_eq!(html_source.uri, program.source.uri);
     assert_eq!(
-        program.html_source.as_ref().unwrap().uri,
-        program.source.uri
-    );
-    assert_eq!(
-        program.versions.as_ref().unwrap().uri.as_str(),
+        program.versions().unwrap().unwrap().uri.as_str(),
         "/sap/bc/adt/programs/programs/z_test/source/main/versions"
     );
     assert_eq!(
-        program.object_structure.as_ref().unwrap().uri.as_str(),
+        program.object_structure().unwrap().unwrap().uri.as_str(),
         "/sap/bc/adt/programs/programs/z_test/objectstructure"
     );
     assert_eq!(
-        program.text_elements.as_ref().unwrap().uri.as_str(),
+        program.text_elements().unwrap().unwrap().uri.as_str(),
         "/sap/bc/adt/textelements/programs/z_test"
     );
     assert_eq!(
         program
-            .enhancement_implementations
-            .as_ref()
+            .enhancement_implementations()
+            .unwrap()
             .unwrap()
             .uri
             .as_str(),
         "/sap/bc/adt/programs/programs/z_test/enhancements/implementations"
     );
     assert_eq!(
-        program.enhancement_options.as_ref().unwrap().uri.as_str(),
+        program.enhancement_options().unwrap().unwrap().uri.as_str(),
         "/sap/bc/adt/programs/programs/z_test/enhancements/options"
     );
     assert_eq!(
         program
-            .source_enhancement_options
-            .as_ref()
+            .source_enhancement_options()
+            .unwrap()
             .unwrap()
             .uri
             .as_str(),
         "/sap/bc/adt/programs/programs/z_test/source/main/enhancements/options"
     );
     assert_eq!(
-        program.object_state.as_ref().unwrap().query,
+        program.object_state().unwrap().unwrap().query,
         [("version".to_owned(), "active".to_owned())]
     );
     assert_eq!(
         program
             .syntax_configuration
             .language
-            .parser
-            .as_ref()
+            .parser()
+            .unwrap()
             .unwrap()
             .uri
             .as_str(),
@@ -385,12 +397,12 @@ async fn program_properties_query_honors_v2_first_priority() {
         .object::<Program>("Z_TEST")
         .unwrap()
         .query()
-        .priority([ProgramMediaVersion::V2, ProgramMediaVersion::V3])
+        .priority([ProgramPropertiesVersion::V2, ProgramPropertiesVersion::V3])
         .version(ObjectVersion::WorkingArea)
         .execute(&client)
         .await
         .unwrap();
-    assert_eq!(response.media_version(), ProgramMediaVersion::V2);
+    assert_eq!(response.media_version(), ProgramPropertiesVersion::V2);
     let program = match response {
         ProgramProperties::V2(program) => *program,
         _ => panic!("unexpected program-properties version"),
@@ -487,7 +499,7 @@ async fn program_lock_and_update_share_one_user_session() {
     let get_source = server
         .mock_async(|when, then| {
             when.method(GET)
-                .path("/sap/bc/adt/programs/programs/z_goat_test/source/main")
+                .path("/sap/bc/adt/programs/programs/z_ziege_test/source/main")
                 .header("accept", "text/plain");
             then.status(200)
                 .header("etag", "SOURCE-ETAG-1")
@@ -497,7 +509,7 @@ async fn program_lock_and_update_share_one_user_session() {
     let lock_program = server
         .mock_async(|when, then| {
             when.method(POST)
-                .path("/sap/bc/adt/programs/programs/z_goat_test")
+                .path("/sap/bc/adt/programs/programs/z_ziege_test")
                 .query_param("_action", "LOCK")
                 .query_param("accessMode", "MODIFY")
                 .header(
@@ -518,7 +530,7 @@ async fn program_lock_and_update_share_one_user_session() {
     let update_source = server
         .mock_async(|when, then| {
             when.method(PUT)
-                .path("/sap/bc/adt/programs/programs/z_goat_test/source/main")
+                .path("/sap/bc/adt/programs/programs/z_ziege_test/source/main")
                 .query_param("lockHandle", "LOCK-HANDLE-1")
                 .header("content-type", "text/plain; charset=utf-8")
                 .header("x-sap-adt-sessiontype", "stateful")
@@ -534,7 +546,7 @@ async fn program_lock_and_update_share_one_user_session() {
     let unlock_program = server
         .mock_async(|when, then| {
             when.method(POST)
-                .path("/sap/bc/adt/programs/programs/z_goat_test")
+                .path("/sap/bc/adt/programs/programs/z_ziege_test")
                 .query_param("_action", "UNLOCK")
                 .query_param("lockHandle", "LOCK-HANDLE-1")
                 .header("x-sap-adt-sessiontype", "stateful")
@@ -573,7 +585,7 @@ async fn program_lock_and_update_share_one_user_session() {
         .discover()
         .await
         .unwrap();
-    let program = client.object::<Program>("Z_GOAT_TEST").unwrap();
+    let program = client.object::<Program>("Z_ZIEGE_TEST").unwrap();
     let source = program.source().query().execute(&client).await.unwrap();
     let session = client.create_user_session();
 

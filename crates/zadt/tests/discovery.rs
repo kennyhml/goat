@@ -1,15 +1,15 @@
 #![cfg(feature = "reqwest")]
 
 use async_trait::async_trait;
-use goat_adt::{
-    AdtRequest, AdtResponse, CategoryId, Client, CoreDiscoveryQuery, DiscoveryError,
-    DiscoveryQuery, Operation, OperationError, ReqwestTransport, ResponseError, Transport,
-    TransportError,
-};
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use httpmock::Mock;
 use httpmock::prelude::*;
 use std::sync::{Arc, Mutex};
+use zadt::{
+    AdtRequest, AdtResponse, CategoryId, Client, CoreDiscoveryQuery, DiscoveryError,
+    DiscoveryQuery, Operation, OperationError, ReqwestTransport, ResponseError, Transport,
+    TransportError,
+};
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
 const CORE_DISCOVERY_XML: &str = include_str!("fixtures/core-discovery.xml");

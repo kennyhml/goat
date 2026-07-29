@@ -501,6 +501,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
 name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -717,31 +723,6 @@ dependencies = [
  "futures-core",
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "goat"
-version = "0.1.0"
-
-[[package]]
-name = "goat-adt"
-version = "0.1.0"
-dependencies = [
- "async-lock",
- "async-trait",
- "cookie",
- "derive_builder",
- "http 1.4.2",
- "httpmock",
- "readonly",
- "reqwest",
- "secrecy",
- "serde",
- "serde-xml-rs",
- "std-uritemplate",
- "thiserror 2.0.19",
- "tokio",
- "url",
 ]
 
 [[package]]
@@ -2539,6 +2520,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "zadt"
+version = "0.1.0"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "cookie",
+ "derive_builder",
+ "http 1.4.2",
+ "httpmock",
+ "readonly",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde-xml-rs",
+ "std-uritemplate",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "zerofrom"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2596,6 +2598,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "ziege"
+version = "0.1.0"
+dependencies = [
+ "dotenvy",
+ "tokio",
+ "zadt",
 ]
 
 [[package]]

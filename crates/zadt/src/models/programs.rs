@@ -1,15 +1,52 @@
 use serde::Deserialize;
 
 use crate::{
-    AdtLink, EnhancementImplementationsRef, EnhancementOptionsRef, EntityTag, GlobalWorkbenchType,
-    HtmlSourceRef, Include, IncludeError, NegotiableMediaVersion, ObjectRef, ObjectStateRef,
-    ObjectStructureRef, ObjectVersion, PackageRef, ParserRef, Program, ProgramError, SourceRef,
-    SourceVersionsRef, TextElementsRef,
-    resource::{AdtLinkMetadata, resolve_href},
-    vocabulary::{Relation, media_type},
+    AdtUri, EnhancementImplementationsRef, EntityTag, GlobalWorkbenchType, HtmlSourceRef, Include,
+    NegotiableMediaVersion, ObjectEnhancementOptionsRef, ObjectError, ObjectRef, ObjectStateRef,
+    ObjectStructureRef, ObjectType, ObjectVersion, ParserRef, Program, ResponseError,
+    SourceEnhancementOptionsRef, SourceRef, SourceVersionsRef, TextElementsRef,
+    objects::Package,
+    resource::{AdtLinkError, AdvertisedLink, Relations, resolve_href},
 };
 
-/// Program properties tagged with the media-type version returned by SAP.
+/// The SAP media-type version used to decode program properties.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ProgramPropertiesVersion {
+    media_type: &'static str,
+    kind: ProgramPropertiesVersionKind,
+}
+
+impl NegotiableMediaVersion for ProgramPropertiesVersion {
+    const SUPPORTED: &'static [Self] = &[Self::V3, Self::V2];
+
+    fn media_type(self) -> &'static str {
+        self.media_type
+    }
+}
+
+impl ProgramPropertiesVersion {
+    pub const V2: Self = Self {
+        media_type: "application/vnd.sap.adt.programs.programs.v2+xml",
+        kind: ProgramPropertiesVersionKind::V2,
+    };
+
+    pub const V3: Self = Self {
+        media_type: "application/vnd.sap.adt.programs.programs.v3+xml",
+        kind: ProgramPropertiesVersionKind::V3,
+    };
+}
+
+/// Local helper to ensure exhaustive matching
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ProgramPropertiesVersionKind {
+    V2,
+    V3,
+}
+
+/// Properties of a program.
+///
+/// Multiple media type versions exist. They do, however, appear to be
+/// identical under regular circumstances - to be clarified.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum ProgramProperties {
@@ -19,10 +56,10 @@ pub enum ProgramProperties {
 
 impl ProgramProperties {
     /// Returns the response media-type version.
-    pub fn media_version(&self) -> ProgramMediaVersion {
+    pub fn media_version(&self) -> ProgramPropertiesVersion {
         match self {
-            Self::V2(_) => ProgramMediaVersion::V2,
-            Self::V3(_) => ProgramMediaVersion::V3,
+            Self::V2(_) => ProgramPropertiesVersion::V2,
+            Self::V3(_) => ProgramPropertiesVersion::V3,
         }
     }
 
@@ -32,86 +69,30 @@ impl ProgramProperties {
             Self::V2(program) | Self::V3(program) => program.etag.as_ref(),
         }
     }
-}
 
-/// The SAP media-type version used to decode program properties.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct ProgramMediaVersion {
-    media_type: &'static str,
-    kind: ProgramRepresentationKind,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum ProgramRepresentationKind {
-    V2,
-    V3,
-}
-
-impl ProgramMediaVersion {
-    pub const V2: Self = Self {
-        media_type: "application/vnd.sap.adt.programs.programs.v2+xml",
-        kind: ProgramRepresentationKind::V2,
-    };
-
-    pub const V3: Self = Self {
-        media_type: "application/vnd.sap.adt.programs.programs.v3+xml",
-        kind: ProgramRepresentationKind::V3,
-    };
-}
-
-impl NegotiableMediaVersion for ProgramMediaVersion {
-    const SUPPORTED: &'static [Self] = &[Self::V3, Self::V2];
-
-    fn media_type(self) -> &'static str {
-        self.media_type
-    }
-}
-
-pub(crate) fn parse_program_properties(
-    resource: &ObjectRef<Program>,
-    media_version: ProgramMediaVersion,
-    body: &[u8],
-    etag: Option<EntityTag>,
-) -> Result<ProgramProperties, ProgramError> {
-    let parsed: RawProgramProperties =
-        serde_xml_rs::from_reader(body).map_err(ProgramError::InvalidResponse)?;
-    let properties = ProgramPropertiesV3::from_raw(resource.clone(), parsed, etag)?;
-    Ok(match media_version.kind {
-        ProgramRepresentationKind::V2 => ProgramProperties::V2(Box::new(properties)),
-        ProgramRepresentationKind::V3 => ProgramProperties::V3(Box::new(properties)),
-    })
-}
-
-/// Include properties tagged with the media-type version returned by SAP.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub enum IncludeProperties {
-    V2(Box<IncludePropertiesV2>),
-}
-
-impl IncludeProperties {
-    /// Returns the response media-type version.
-    pub fn media_version(&self) -> IncludeMediaVersion {
-        match self {
-            Self::V2(_) => IncludeMediaVersion::V2,
-        }
-    }
-
-    /// Returns the response entity tag, when present.
-    pub fn etag(&self) -> Option<&str> {
-        match self {
-            Self::V2(include) => include.etag.as_deref(),
-        }
+    pub(crate) fn parse(
+        resource: &ObjectRef<Program>,
+        media_version: ProgramPropertiesVersion,
+        body: &[u8],
+        etag: Option<EntityTag>,
+    ) -> Result<Self, ResponseError> {
+        let parsed: RawProgramProperties =
+            serde_xml_rs::from_reader(body).map_err(ObjectError::InvalidResponse)?;
+        let properties = ProgramPropertiesV3::from_raw(resource.clone(), parsed, etag)?;
+        Ok(match media_version.kind {
+            ProgramPropertiesVersionKind::V2 => Self::V2(Box::new(properties)),
+            ProgramPropertiesVersionKind::V3 => Self::V3(Box::new(properties)),
+        })
     }
 }
 
 /// The SAP media-type version used to decode include properties.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum IncludeMediaVersion {
+pub enum IncludePropertyVersion {
     V2,
 }
 
-impl NegotiableMediaVersion for IncludeMediaVersion {
+impl NegotiableMediaVersion for IncludePropertyVersion {
     const SUPPORTED: &'static [Self] = &[Self::V2];
 
     fn media_type(self) -> &'static str {
@@ -121,24 +102,47 @@ impl NegotiableMediaVersion for IncludeMediaVersion {
     }
 }
 
-pub(crate) fn parse_include_properties(
-    resource: &ObjectRef<Include>,
-    version: IncludeMediaVersion,
-    body: &[u8],
-    etag: Option<EntityTag>,
-) -> Result<IncludeProperties, IncludeError> {
-    let parsed: RawIncludeProperties =
-        serde_xml_rs::from_reader(body).map_err(IncludeError::InvalidResponse)?;
-    let properties = IncludePropertiesV2::from_raw(resource.clone(), parsed, etag)?;
-    Ok(match version {
-        IncludeMediaVersion::V2 => IncludeProperties::V2(Box::new(properties)),
-    })
+/// Include properties tagged with the media-type version returned by ADT.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum IncludeProperties {
+    V2(Box<IncludePropertiesV2>),
+}
+
+impl IncludeProperties {
+    /// Returns the response media-type version.
+    pub fn media_version(&self) -> IncludePropertyVersion {
+        match self {
+            Self::V2(_) => IncludePropertyVersion::V2,
+        }
+    }
+
+    /// Returns the response entity tag, when present.
+    pub fn etag(&self) -> Option<&str> {
+        match self {
+            Self::V2(include) => include.etag.as_deref(),
+        }
+    }
+
+    pub(crate) fn parse(
+        resource: &ObjectRef<Include>,
+        version: IncludePropertyVersion,
+        body: &[u8],
+        etag: Option<EntityTag>,
+    ) -> Result<Self, ResponseError> {
+        let parsed: RawIncludeProperties =
+            serde_xml_rs::from_reader(body).map_err(ObjectError::InvalidResponse)?;
+        let properties = IncludePropertiesV2::from_raw(resource.clone(), parsed, etag)?;
+        Ok(match version {
+            IncludePropertyVersion::V2 => Self::V2(Box::new(properties)),
+        })
+    }
 }
 
 /// The plain-text console output produced by running an ABAP program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[readonly::make]
-pub struct ProgramRunOutput {
+pub struct ProgramRunResult {
     /// The program that was executed.
     pub reference: ObjectRef<Program>,
 
@@ -146,7 +150,7 @@ pub struct ProgramRunOutput {
     pub content: String,
 }
 
-impl ProgramRunOutput {
+impl ProgramRunResult {
     pub(crate) fn new(reference: ObjectRef<Program>, content: String) -> Self {
         Self { reference, content }
     }
@@ -156,10 +160,6 @@ impl ProgramRunOutput {
 pub type ProgramPropertiesV2 = ProgramPropertiesV3;
 
 /// The ABAP program-properties payload shared by the V2 and V3 media types.
-/// TODO: Lazily resolve the associations instead? Saves us doing a
-/// bunch of potentially not needed work ahead of time, but also
-/// means we dont define a clear contract for the user in terms of
-/// what the model may reference.
 #[derive(Clone, Debug)]
 #[readonly::make]
 pub struct ProgramPropertiesV3 {
@@ -218,7 +218,7 @@ pub struct ProgramPropertiesV3 {
     pub abap_language_version: String,
 
     /// The package containing the program.
-    pub package: PackageRef,
+    pub package: ObjectRef<Package>,
 
     /// The syntax configuration and parser advertised for the source.
     pub syntax_configuration: SyntaxConfiguration,
@@ -226,89 +226,94 @@ pub struct ProgramPropertiesV3 {
     /// The advertised plain-text source representation.
     pub source: SourceRef,
 
-    /// The advertised rendered HTML source representation.
-    pub html_source: Option<HtmlSourceRef>,
-
-    /// The source version-history resource.
-    pub versions: Option<SourceVersionsRef>,
-
-    /// The program's object-structure resource.
-    pub object_structure: Option<ObjectStructureRef>,
-
-    /// The program's text-elements resource.
-    pub text_elements: Option<TextElementsRef>,
-
-    /// Enhancement implementations associated with the program.
-    pub enhancement_implementations: Option<EnhancementImplementationsRef>,
-
-    /// Enhancement options associated with the program object.
-    pub enhancement_options: Option<EnhancementOptionsRef>,
-
-    /// Enhancement options associated with the program source.
-    pub source_enhancement_options: Option<EnhancementOptionsRef>,
-
-    /// A link to the program's other active or inactive state.
-    pub object_state: Option<ObjectStateRef>,
-
-    /// All top-level links advertised by the program representation.
-    pub links: Vec<AdtLink>,
-
     /// The entity tag of these program properties, when present.
     pub etag: Option<EntityTag>,
+
+    relations: Relations,
 }
 
 impl ProgramPropertiesV3 {
+    /// Returns the program's advertised links without resolving them eagerly.
+    pub fn relations(&self) -> &Relations {
+        &self.relations
+    }
+
+    /// Resolves the advertised rendered HTML source, when present.
+    pub fn html_source(&self) -> Result<Option<HtmlSourceRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised source version-history resource, when present.
+    pub fn versions(&self) -> Result<Option<SourceVersionsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised object-structure resource, when present.
+    pub fn object_structure(&self) -> Result<Option<ObjectStructureRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised text-elements resource, when present.
+    pub fn text_elements(&self) -> Result<Option<TextElementsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised enhancement implementations, when present.
+    pub fn enhancement_implementations(
+        &self,
+    ) -> Result<Option<EnhancementImplementationsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised object enhancement options, when present.
+    pub fn enhancement_options(&self) -> Result<Option<ObjectEnhancementOptionsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised source enhancement options, when present.
+    pub fn source_enhancement_options(
+        &self,
+    ) -> Result<Option<SourceEnhancementOptionsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the link to the program's other active or inactive state.
+    pub fn object_state(&self) -> Result<Option<ObjectStateRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
     fn from_raw(
         reference: ObjectRef<Program>,
         raw: RawProgramProperties,
         etag: Option<EntityTag>,
-    ) -> Result<Self, ProgramError> {
-        let package_object = ObjectRef::parse(&raw.package.uri).map_err(|source| {
-            ProgramError::InvalidPackageUri {
-                uri: raw.package.uri.clone(),
-                source,
-            }
-        })?;
-        let package = PackageRef::new(raw.package.name, raw.package.object_type, package_object);
+    ) -> Result<Self, ObjectError> {
+        let package = package_reference(raw.package)?;
+
         let version = ObjectVersion::parse(&raw.version).ok_or_else(|| {
-            ProgramError::UnsupportedObjectVersion {
+            ObjectError::UnsupportedObjectVersion {
                 version: raw.version.clone(),
             }
         })?;
-        let links = resolve_links(reference.uri(), raw.links)?;
-        let source_link = find_link(&links, Relation::Source, Some(media_type::SOURCE))
-            .ok_or(ProgramError::MissingSourceLink)?;
-        let source = SourceRef::from_link(reference.erase(), source_link);
+        let relations = Relations::new(reference.erase(), raw.links);
+        let source: SourceRef = relations.get()?.ok_or(ObjectError::MissingRelation {
+            relation: "plain-text source",
+        })?;
         let declared_source = resolve_href(reference.uri(), &raw.source_uri).map_err(|source| {
-            ProgramError::InvalidLink {
+            ObjectError::InvalidLink {
                 href: raw.source_uri.clone(),
                 source,
             }
         })?;
         if declared_source.target != source.uri {
-            return Err(ProgramError::SourceLinkMismatch {
+            return Err(ObjectError::RelationMismatch {
+                relation: "source",
                 declared: declared_source.target.to_string(),
                 advertised: source.uri.to_string(),
             });
         }
 
-        let html_source = find_link(&links, Relation::Source, Some(media_type::HTML))
-            .map(HtmlSourceRef::from_link);
-        let versions = typed_link::<SourceVersionsRef>(&links, Relation::Versions);
-        let object_structure = typed_link::<ObjectStructureRef>(&links, Relation::ObjectStructure);
-        let text_elements = typed_link::<TextElementsRef>(&links, Relation::TextElements);
-        let enhancement_implementations = typed_link::<EnhancementImplementationsRef>(
-            &links,
-            Relation::EnhancementImplementations,
-        );
-        let enhancement_options =
-            typed_link::<EnhancementOptionsRef>(&links, Relation::ObjectEnhancementOptions);
-        let source_enhancement_options =
-            typed_link::<EnhancementOptionsRef>(&links, Relation::SourceEnhancementOptions);
-        let object_state = typed_link::<ObjectStateRef>(&links, Relation::ObjectStates);
-
-        let syntax_links = resolve_links(reference.uri(), raw.syntax_configuration.language.links)?;
-        let parser = typed_link::<ParserRef>(&syntax_links, Relation::Parser);
+        let syntax_relations =
+            Relations::new(reference.erase(), raw.syntax_configuration.language.links);
 
         Ok(Self {
             reference,
@@ -334,21 +339,12 @@ impl ProgramPropertiesV3 {
                 language: SyntaxLanguage {
                     version: raw.syntax_configuration.language.version,
                     description: raw.syntax_configuration.language.description,
-                    parser,
-                    links: syntax_links,
+                    relations: syntax_relations,
                 },
             },
             source,
-            html_source,
-            versions,
-            object_structure,
-            text_elements,
-            enhancement_implementations,
-            enhancement_options,
-            source_enhancement_options,
-            object_state,
-            links,
             etag,
+            relations,
         })
     }
 }
@@ -409,66 +405,82 @@ pub struct IncludePropertiesV2 {
     pub master_system: String,
 
     /// The package containing the include.
-    pub package: PackageRef,
+    pub package: ObjectRef<Package>,
 
     /// The advertised plain-text source representation.
     pub source: SourceRef,
 
-    /// The advertised rendered HTML source representation.
-    pub html_source: Option<HtmlSourceRef>,
-
-    /// The source version-history resource.
-    pub versions: Option<SourceVersionsRef>,
-
-    /// The include's text-elements resource.
-    pub text_elements: Option<TextElementsRef>,
-
-    /// Enhancement implementations associated with the include.
-    pub enhancement_implementations: Option<EnhancementImplementationsRef>,
-
-    /// Enhancement options associated with the include object.
-    pub enhancement_options: Option<EnhancementOptionsRef>,
-
-    /// Enhancement options associated with the include source.
-    pub source_enhancement_options: Option<EnhancementOptionsRef>,
-
-    /// All links advertised by the include representation.
-    pub links: Vec<AdtLink>,
-
     /// The entity tag of these include properties, when present.
     pub etag: Option<EntityTag>,
+
+    relations: Relations,
 }
 
 impl IncludePropertiesV2 {
+    /// Returns the include's advertised links without resolving them eagerly.
+    pub fn relations(&self) -> &Relations {
+        &self.relations
+    }
+
+    /// Resolves the advertised rendered HTML source, when present.
+    pub fn html_source(&self) -> Result<Option<HtmlSourceRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised source version-history resource, when present.
+    pub fn versions(&self) -> Result<Option<SourceVersionsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised text-elements resource, when present.
+    pub fn text_elements(&self) -> Result<Option<TextElementsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised enhancement implementations, when present.
+    pub fn enhancement_implementations(
+        &self,
+    ) -> Result<Option<EnhancementImplementationsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised object enhancement options, when present.
+    pub fn enhancement_options(&self) -> Result<Option<ObjectEnhancementOptionsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
+    /// Resolves the advertised source enhancement options, when present.
+    pub fn source_enhancement_options(
+        &self,
+    ) -> Result<Option<SourceEnhancementOptionsRef>, AdtLinkError> {
+        self.relations.get()
+    }
+
     fn from_raw(
         reference: ObjectRef<Include>,
         raw: RawIncludeProperties,
         etag: Option<EntityTag>,
-    ) -> Result<Self, IncludeError> {
-        let package_object = ObjectRef::parse(&raw.package.uri).map_err(|source| {
-            IncludeError::InvalidPackageUri {
-                uri: raw.package.uri.clone(),
-                source,
-            }
-        })?;
-        let package = PackageRef::new(raw.package.name, raw.package.object_type, package_object);
+    ) -> Result<Self, ObjectError> {
+        let package = package_reference(raw.package)?;
+
         let version = ObjectVersion::parse(&raw.version).ok_or_else(|| {
-            IncludeError::UnsupportedObjectVersion {
+            ObjectError::UnsupportedObjectVersion {
                 version: raw.version.clone(),
             }
         })?;
-        let links = resolve_include_links(reference.uri(), raw.links)?;
-        let source_link = find_link(&links, Relation::Source, Some(media_type::SOURCE))
-            .ok_or(IncludeError::MissingSourceLink)?;
-        let source = SourceRef::from_link(reference.erase(), source_link);
+        let relations = Relations::new(reference.erase(), raw.links);
+        let source: SourceRef = relations.get()?.ok_or(ObjectError::MissingRelation {
+            relation: "plain-text source",
+        })?;
         let declared_source = resolve_href(reference.uri(), &raw.source_uri).map_err(|source| {
-            IncludeError::InvalidLink {
+            ObjectError::InvalidLink {
                 href: raw.source_uri.clone(),
                 source,
             }
         })?;
         if declared_source.target != source.uri {
-            return Err(IncludeError::SourceLinkMismatch {
+            return Err(ObjectError::RelationMismatch {
+                relation: "source",
                 declared: declared_source.target.to_string(),
                 advertised: source.uri.to_string(),
             });
@@ -479,25 +491,12 @@ impl IncludePropertiesV2 {
             .map(|context| {
                 resolve_href(reference.uri(), &context.uri)
                     .map(|resolved| ObjectRef::new(resolved.target))
-                    .map_err(|source| IncludeError::InvalidContextUri {
-                        uri: context.uri,
+                    .map_err(|source| ObjectError::InvalidLink {
+                        href: context.uri,
                         source,
                     })
             })
             .transpose()?;
-        let html_source = find_link(&links, Relation::Source, Some(media_type::HTML))
-            .map(HtmlSourceRef::from_link);
-        let versions = typed_link::<SourceVersionsRef>(&links, Relation::Versions);
-        let text_elements = typed_link::<TextElementsRef>(&links, Relation::TextElements);
-        let enhancement_implementations = typed_link::<EnhancementImplementationsRef>(
-            &links,
-            Relation::EnhancementImplementations,
-        );
-        let enhancement_options =
-            typed_link::<EnhancementOptionsRef>(&links, Relation::ObjectEnhancementOptions);
-        let source_enhancement_options =
-            typed_link::<EnhancementOptionsRef>(&links, Relation::SourceEnhancementOptions);
-
         Ok(Self {
             reference,
             name: raw.name,
@@ -518,14 +517,8 @@ impl IncludePropertiesV2 {
             master_system: raw.master_system,
             package,
             source,
-            html_source,
-            versions,
-            text_elements,
-            enhancement_implementations,
-            enhancement_options,
-            source_enhancement_options,
-            links,
             etag,
+            relations,
         })
     }
 }
@@ -548,109 +541,19 @@ pub struct SyntaxLanguage {
     /// The server-provided language description.
     pub description: String,
 
-    /// The parser grammar advertised for this language.
-    pub parser: Option<ParserRef>,
-
-    /// All links advertised for this language configuration.
-    pub links: Vec<AdtLink>,
+    relations: Relations,
 }
 
-trait FromAdtLink: Sized {
-    fn from_adt_link(link: &AdtLink) -> Self;
-}
+impl SyntaxLanguage {
+    /// Returns the syntax language's advertised links without resolving them eagerly.
+    pub fn relations(&self) -> &Relations {
+        &self.relations
+    }
 
-macro_rules! resolved_link_conversion {
-    ($($name:ident),+ $(,)?) => {
-        $(
-            impl FromAdtLink for $name {
-                fn from_adt_link(link: &AdtLink) -> Self {
-                    Self::from_link(link)
-                }
-            }
-        )+
-    };
-}
-
-resolved_link_conversion!(
-    SourceVersionsRef,
-    ObjectStructureRef,
-    TextElementsRef,
-    EnhancementImplementationsRef,
-    EnhancementOptionsRef,
-    ObjectStateRef,
-    ParserRef,
-);
-
-fn typed_link<T: FromAdtLink>(links: &[AdtLink], relation: Relation) -> Option<T> {
-    find_link(links, relation, None).map(T::from_adt_link)
-}
-
-fn find_link<'a>(
-    links: &'a [AdtLink],
-    relation: Relation,
-    media_type: Option<&str>,
-) -> Option<&'a AdtLink> {
-    links.iter().find(|link| {
-        link.relation.as_deref().and_then(Relation::from_uri) == Some(relation)
-            && media_type.is_none_or(|expected| {
-                link.media_type.as_deref().is_some_and(|actual| {
-                    actual
-                        .split(';')
-                        .next()
-                        .is_some_and(|value| value.trim().eq_ignore_ascii_case(expected))
-                })
-            })
-    })
-}
-
-fn resolve_links(
-    base: &crate::AdtUri,
-    links: Vec<RawAtomLink>,
-) -> Result<Vec<AdtLink>, ProgramError> {
-    links
-        .into_iter()
-        .map(|link| {
-            let href = link.href.clone();
-            AdtLink::from_href(
-                base,
-                link.href,
-                AdtLinkMetadata {
-                    relation: link.relation,
-                    media_type: link.media_type,
-                    hreflang: link.hreflang,
-                    title: link.title,
-                    length: link.length,
-                    etag: link.etag,
-                },
-            )
-            .map_err(|source| ProgramError::InvalidLink { href, source })
-        })
-        .collect()
-}
-
-fn resolve_include_links(
-    base: &crate::AdtUri,
-    links: Vec<RawAtomLink>,
-) -> Result<Vec<AdtLink>, IncludeError> {
-    links
-        .into_iter()
-        .map(|link| {
-            let href = link.href.clone();
-            AdtLink::from_href(
-                base,
-                link.href,
-                AdtLinkMetadata {
-                    relation: link.relation,
-                    media_type: link.media_type,
-                    hreflang: link.hreflang,
-                    title: link.title,
-                    length: link.length,
-                    etag: link.etag,
-                },
-            )
-            .map_err(|source| IncludeError::InvalidLink { href, source })
-        })
-        .collect()
+    /// Resolves the advertised parser grammar, when present.
+    pub fn parser(&self) -> Result<Option<ParserRef>, AdtLinkError> {
+        self.relations.get()
+    }
 }
 
 #[derive(Deserialize)]
@@ -697,7 +600,7 @@ struct RawProgramProperties {
     #[serde(rename = "abapsource:syntaxConfiguration")]
     syntax_configuration: RawSyntaxConfiguration,
     #[serde(rename = "atom:link", default)]
-    links: Vec<RawAtomLink>,
+    links: Vec<AdvertisedLink>,
 }
 
 #[derive(Deserialize)]
@@ -740,7 +643,7 @@ struct RawIncludeProperties {
     #[serde(rename = "include:contextRef")]
     context_ref: Option<RawObjectReference>,
     #[serde(rename = "atom:link", default)]
-    links: Vec<RawAtomLink>,
+    links: Vec<AdvertisedLink>,
 }
 
 #[derive(Deserialize)]
@@ -759,6 +662,20 @@ struct RawPackage {
     object_type: GlobalWorkbenchType,
 }
 
+fn package_reference(raw: RawPackage) -> Result<ObjectRef<Package>, ObjectError> {
+    if raw.object_type != Package::TYPE {
+        return Err(ObjectError::UnexpectedObjectType {
+            expected: Package::TYPE,
+            actual: raw.object_type,
+        });
+    }
+    let uri = AdtUri::parse(&raw.uri).map_err(|source| ObjectError::InvalidLink {
+        href: raw.uri.clone(),
+        source,
+    })?;
+    ObjectRef::from_parts(raw.name, uri)
+}
+
 #[derive(Deserialize)]
 struct RawSyntaxConfiguration {
     #[serde(rename = "abapsource:language")]
@@ -772,25 +689,7 @@ struct RawSyntaxLanguage {
     #[serde(rename = "abapsource:description")]
     description: String,
     #[serde(rename = "atom:link", default)]
-    links: Vec<RawAtomLink>,
-}
-
-#[derive(Deserialize)]
-struct RawAtomLink {
-    #[serde(rename = "@href")]
-    href: String,
-    #[serde(rename = "@rel")]
-    relation: Option<String>,
-    #[serde(rename = "@type")]
-    media_type: Option<String>,
-    #[serde(rename = "@hreflang")]
-    hreflang: Option<String>,
-    #[serde(rename = "@title")]
-    title: Option<String>,
-    #[serde(rename = "@length")]
-    length: Option<String>,
-    #[serde(rename = "@etag")]
-    etag: Option<String>,
+    links: Vec<AdvertisedLink>,
 }
 
 #[cfg(test)]
@@ -800,13 +699,13 @@ mod tests {
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
     const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
 
-    fn parse(body: &str) -> Result<ProgramPropertiesV3, ProgramError> {
-        let properties = parse_program_properties(
+    fn parse(body: &str) -> Result<ProgramPropertiesV3, ResponseError> {
+        let properties = ProgramProperties::parse(
             &ObjectRef::<Program>::for_test(
                 "Z_TEST",
                 crate::AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
             ),
-            ProgramMediaVersion::V3,
+            ProgramPropertiesVersion::V3,
             body.as_bytes(),
             Some(EntityTag::from_static("program-etag")),
         )?;
@@ -824,14 +723,14 @@ mod tests {
             "/sap/bc/adt/programs/programs/Z_TEST/source/main"
         );
         assert_eq!(program.source.etag.as_deref(), Some("202607251959580001"));
-        assert_eq!(program.links.len(), 9);
-        assert_eq!(program.syntax_configuration.language.links.len(), 1);
+        assert_eq!(program.relations().len(), 9);
+        assert_eq!(program.syntax_configuration.language.relations().len(), 1);
         assert_eq!(
             program
                 .syntax_configuration
                 .language
-                .parser
-                .as_ref()
+                .parser()
+                .unwrap()
                 .unwrap()
                 .etag
                 .as_deref(),
@@ -845,9 +744,9 @@ mod tests {
             "ZTEST",
             crate::AdtUri::parse("/sap/bc/adt/programs/includes/ZTEST").unwrap(),
         );
-        let properties = parse_include_properties(
+        let properties = IncludeProperties::parse(
             &reference,
-            IncludeMediaVersion::V2,
+            IncludePropertyVersion::V2,
             INCLUDE_XML.as_bytes(),
             Some(EntityTag::from_static("include-etag")),
         )
@@ -861,8 +760,8 @@ mod tests {
         assert_eq!(include.version, ObjectVersion::Active);
         assert_eq!(include.context_ref_count, 0);
         assert!(include.context_ref.is_none());
-        assert_eq!(include.package.name, "$TMP");
-        assert_eq!(include.links.len(), 7);
+        assert_eq!(include.package.name(), "$TMP");
+        assert_eq!(include.relations().len(), 7);
         assert_eq!(
             include.source.uri.as_str(),
             "/sap/bc/adt/programs/includes/ZTEST/source/main"
@@ -880,7 +779,10 @@ mod tests {
     fn rejects_malformed_program_xml() {
         let error = parse("<program:abapProgram>").unwrap_err();
 
-        assert!(matches!(error, ProgramError::InvalidResponse(_)));
+        assert!(matches!(
+            error,
+            ResponseError::Object(ObjectError::InvalidResponse(_))
+        ));
     }
 
     #[test]
@@ -890,7 +792,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            ProgramError::UnsupportedObjectVersion { version } if version == "dirty"
+            ResponseError::Object(ObjectError::UnsupportedObjectVersion { version })
+                if version == "dirty"
         ));
     }
 
@@ -903,7 +806,12 @@ mod tests {
         );
         let error = parse(&body).unwrap_err();
 
-        assert!(matches!(error, ProgramError::MissingSourceLink));
+        assert!(matches!(
+            error,
+            ResponseError::Object(ObjectError::MissingRelation {
+                relation: "plain-text source"
+            })
+        ));
     }
 
     #[test]
@@ -916,18 +824,36 @@ mod tests {
 
         assert!(matches!(
             error,
-            ProgramError::SourceLinkMismatch { declared, advertised }
+            ResponseError::Object(ObjectError::RelationMismatch {
+                relation: "source",
+                declared,
+                advertised,
+            })
                 if declared.ends_with("/source/other")
                     && advertised.ends_with("/source/main")
         ));
     }
 
     #[test]
+    fn defers_invalid_optional_links_until_accessed() {
+        let invalid_href = "https://attacker.example/sap/bc/adt/textelements/programs/Z_TEST";
+        let body = PROGRAM_XML.replace("/sap/bc/adt/textelements/programs/z_test", invalid_href);
+
+        let program = parse(&body).unwrap();
+        let error = program.text_elements().unwrap_err();
+
+        assert_eq!(error.href(), invalid_href);
+    }
+
+    #[test]
     fn retains_unknown_link_relations_and_representation_metadata() {
-        let base = crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZDEMO").unwrap();
-        let links = resolve_links(
-            &base,
-            vec![RawAtomLink {
+        let relations = Relations::new(
+            ObjectRef::<Program>::for_test(
+                "ZDEMO",
+                crate::AdtUri::parse("/sap/bc/adt/programs/programs/ZDEMO").unwrap(),
+            )
+            .erase(),
+            vec![AdvertisedLink {
                 href: "related/resource?version=active#section".to_owned(),
                 relation: Some("https://example.test/relations/future".to_owned()),
                 media_type: Some("application/example+xml".to_owned()),
@@ -936,10 +862,9 @@ mod tests {
                 length: Some("42".to_owned()),
                 etag: Some("future-etag".to_owned()),
             }],
-        )
-        .unwrap();
+        );
 
-        let link = &links[0];
+        let link = relations.iter().next().unwrap().unwrap();
         assert_eq!(link.href, "related/resource?version=active#section");
         assert_eq!(
             link.target.as_str(),
@@ -956,6 +881,7 @@ mod tests {
         assert_eq!(link.title.as_deref(), Some("Future relation"));
         assert_eq!(link.length.as_deref(), Some("42"));
         assert_eq!(link.etag.as_deref(), Some("future-etag"));
-        assert!(typed_link::<ParserRef>(&links, Relation::Parser).is_none());
+        let parser: Option<ParserRef> = relations.get().unwrap();
+        assert!(parser.is_none());
     }
 }

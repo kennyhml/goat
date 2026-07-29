@@ -43,9 +43,9 @@ Each sealed object-type profile should provide:
 
 The generic query handles missing or unsupported response `Content-Type` values,
 then passes the typed resource, negotiated media version, body, and ETag to the
-profile parser. Domain-specific parsing helpers may return `ProgramError` or
-`IncludeError` internally; the profile adapts those errors to the fixed
-`ResponseError` operation boundary.
+profile parser. Properties types parse their own representations and return the
+fixed `ResponseError` operation boundary while retaining domain-specific errors
+as detailed causes.
 
 Keep `ProgramProperties`, `IncludeProperties`, and future
 `ClassProperties` separate. Their XML schemas, links, and domain semantics are
