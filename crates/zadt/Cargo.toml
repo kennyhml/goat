@@ -23,6 +23,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.8.1"
 std-uritemplate = "2.0"
 thiserror = "2.0"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 url = "2.5"
 
 [dev-dependencies]

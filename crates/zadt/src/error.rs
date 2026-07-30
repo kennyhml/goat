@@ -28,6 +28,13 @@ pub enum ReqwestTransportBuildError {
     HttpClient(#[from] reqwest::Error),
 }
 
+#[cfg(feature = "reqwest")]
+impl From<derive_builder::UninitializedFieldError> for ReqwestTransportBuildError {
+    fn from(error: derive_builder::UninitializedFieldError) -> Self {
+        Self::MissingField(error.field_name())
+    }
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DiscoveryError {

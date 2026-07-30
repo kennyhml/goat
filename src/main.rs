@@ -1,11 +1,20 @@
 use std::{env, error::Error, io, time::Duration};
 
 use tokio::time::sleep;
-use zadt::{Client, Logon, Operation, Package, Program, ProgramProperties, ReqwestTransport};
+use tracing_subscriber::EnvFilter;
+use zadt::{
+    Client, Logon, Operation, Package, Program, ProgramProperties, ReqwestTransport, TransportExt,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("zadt=debug")),
+        )
+        .init();
 
     let destination = required_env("SAP_DESTINATION")?;
     let sap_client = required_env("SAP_CLIENT")?;
@@ -18,7 +27,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .sap_client(sap_client)
         .language(language)
         .basic_auth(username, password)
-        .build()?;
+        .build()?
+        .traced();
     let client = Client::new(transport);
     Logon.execute(&client).await?;
     let client = client.discover().await?;
@@ -56,7 +66,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         properties.package.uri()
     );
     println!("version: {:?}", properties.version);
-    println!("\n{}", source.content);
+    // println!("\n{}", source.content);
 
     Ok(())
 }

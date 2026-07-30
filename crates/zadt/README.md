@@ -56,6 +56,10 @@ transports can implement the `Transport` trait. Stateless operations execute
 directly through `Client`; operations requiring a persistent SAP user session
 are represented separately as stateful operations.
 
+Importing `TransportExt` adds `.traced()` to every concrete transport. The
+decorator emits redacted structured `tracing` events that a CLI, language
+server, or test subscriber can route to its preferred output.
+
 ### SAP session terminology
 
 | Term | Representation | Purpose |

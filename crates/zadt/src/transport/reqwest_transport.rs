@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_lock::Mutex;
 use async_trait::async_trait;
+use derive_builder::Builder;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use reqwest::cookie::{CookieStore, Jar};
 use secrecy::{ExposeSecret, SecretString};
@@ -42,31 +43,27 @@ impl ReqwestTransport {
     }
 }
 
-#[derive(Default)]
-pub struct ReqwestTransportBuilder {
-    destination: Option<String>,
-    sap_client: Option<String>,
-    language: Option<String>,
-    username: Option<String>,
-    password: Option<SecretString>,
+#[doc(hidden)]
+#[derive(Builder)]
+#[builder(
+    name = "ReqwestTransportBuilder",
+    pattern = "owned",
+    setter(into),
+    build_fn(private, name = "build_config", error = "ReqwestTransportBuildError")
+)]
+pub struct ReqwestTransportConfig {
+    destination: String,
+    sap_client: String,
+    language: String,
+
+    #[builder(setter(custom))]
+    username: String,
+
+    #[builder(setter(custom))]
+    password: SecretString,
 }
 
 impl ReqwestTransportBuilder {
-    pub fn destination(mut self, destination: impl Into<String>) -> Self {
-        self.destination = Some(destination.into());
-        self
-    }
-
-    pub fn sap_client(mut self, sap_client: impl Into<String>) -> Self {
-        self.sap_client = Some(sap_client.into());
-        self
-    }
-
-    pub fn language(mut self, language: impl Into<String>) -> Self {
-        self.language = Some(language.into());
-        self
-    }
-
     pub fn basic_auth(mut self, username: impl Into<String>, password: impl Into<String>) -> Self {
         self.username = Some(username.into());
         self.password = Some(SecretString::from(password.into()));
@@ -74,10 +71,8 @@ impl ReqwestTransportBuilder {
     }
 
     pub fn build(self) -> Result<ReqwestTransport, ReqwestTransportBuildError> {
-        let destination = self
-            .destination
-            .ok_or(ReqwestTransportBuildError::MissingField("destination"))?;
-        let mut destination = Url::parse(&destination)?;
+        let config = self.build_config()?;
+        let mut destination = Url::parse(&config.destination)?;
         if !matches!(destination.scheme(), "http" | "https") {
             return Err(ReqwestTransportBuildError::UnsupportedScheme);
         }
@@ -90,15 +85,9 @@ impl ReqwestTransportBuilder {
         }
         destination.set_path("/");
 
-        let sap_client = self
-            .sap_client
-            .ok_or(ReqwestTransportBuildError::MissingField("sap_client"))?;
-        let language = self
-            .language
-            .ok_or(ReqwestTransportBuildError::MissingField("language"))?;
         let user_context = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("sap-client", &sap_client)
-            .append_pair("sap-language", &language)
+            .append_pair("sap-client", &config.sap_client)
+            .append_pair("sap-language", &config.language)
             .finish();
         let cookie_store = Arc::new(SapCookieStore::new(&destination, &user_context));
         let client = reqwest::Client::builder()
@@ -111,12 +100,8 @@ impl ReqwestTransportBuilder {
             cookies: cookie_store,
             csrf_token: Mutex::new(None),
             destination,
-            username: self
-                .username
-                .ok_or(ReqwestTransportBuildError::MissingField("username"))?,
-            password: self
-                .password
-                .ok_or(ReqwestTransportBuildError::MissingField("password"))?,
+            username: config.username,
+            password: config.password,
         })
     }
 }
@@ -309,6 +294,18 @@ mod tests {
     use super::*;
     use crate::AdtUri;
     use http::Method;
+
+    #[test]
+    fn builder_reports_missing_required_fields() {
+        let Err(error) = ReqwestTransport::builder().build() else {
+            panic!("incomplete transport builder succeeded");
+        };
+
+        assert!(matches!(
+            error,
+            ReqwestTransportBuildError::MissingField("destination")
+        ));
+    }
 
     #[test]
     fn request_without_query_has_no_empty_query_delimiter() {
