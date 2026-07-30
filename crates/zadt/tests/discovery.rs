@@ -7,7 +7,7 @@ use httpmock::prelude::*;
 use std::sync::{Arc, Mutex};
 use zadt::{
     AdtRequest, AdtResponse, CategoryId, Client, CoreDiscoveryQuery, DiscoveryError,
-    DiscoveryQuery, Operation, OperationError, ReqwestTransport, ResponseError, Transport,
+    DiscoveryQuery, Logon, Operation, OperationError, ReqwestTransport, ResponseError, Transport,
     TransportError,
 };
 
@@ -35,10 +35,11 @@ async fn mock_logon(server: &MockServer) -> Mock<'_> {
 }
 
 #[tokio::test]
-async fn core_discovery_is_an_operation_for_a_logged_on_client() {
+async fn core_discovery_is_available_before_central_discovery() {
     let transport = FixtureTransport::new(CORE_DISCOVERY_XML);
     let requests = Arc::clone(&transport.requests);
-    let client = Client::new(transport).logon().await.unwrap();
+    let client = Client::new(transport);
+    Logon.execute(&client).await.unwrap();
 
     let capabilities = CoreDiscoveryQuery.execute(&client).await.unwrap();
     let collection = capabilities
@@ -65,13 +66,9 @@ async fn core_discovery_is_an_operation_for_a_logged_on_client() {
 
 #[tokio::test]
 async fn client_discovery_transitions_and_retains_capabilities() {
-    let client = Client::new(FixtureTransport::new(DISCOVERY_XML))
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-        .unwrap();
+    let client = Client::new(FixtureTransport::new(DISCOVERY_XML));
+    Logon.execute(&client).await.unwrap();
+    let client = client.discover().await.unwrap();
     let cloned_client = client.clone();
 
     let collection = client.collection(PROGRAMS_CATEGORY).unwrap();
@@ -116,13 +113,9 @@ async fn reqwest_transport_sends_the_discovery_contract() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport)
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-        .unwrap();
+    let client = Client::new(transport);
+    Logon.execute(&client).await.unwrap();
+    let client = client.discover().await.unwrap();
 
     logon.assert_async().await;
     discovery.assert_async().await;
@@ -173,7 +166,8 @@ async fn reqwest_transport_reuses_security_session_cookies() {
         .basic_auth("USER", "PASSWORD")
         .build()
         .unwrap();
-    let client = Client::new(transport).logon().await.unwrap();
+    let client = Client::new(transport);
+    Logon.execute(&client).await.unwrap();
 
     client.discover().await.unwrap();
 
@@ -204,13 +198,9 @@ async fn unexpected_status_is_an_operation_response_error() {
         .build()
         .unwrap();
 
-    let error = match Client::new(transport)
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-    {
+    let client = Client::new(transport);
+    Logon.execute(&client).await.unwrap();
+    let error = match client.discover().await {
         Ok(_) => panic!("discovery unexpectedly succeeded"),
         Err(error) => error,
     };
@@ -227,10 +217,8 @@ async fn unexpected_status_is_an_operation_response_error() {
 
 #[tokio::test]
 async fn discovery_rejects_collection_urls_outside_the_sap_resource_root() {
-    let client = Client::new(FixtureTransport::new(INVALID_DISCOVERY_XML))
-        .logon()
-        .await
-        .unwrap();
+    let client = Client::new(FixtureTransport::new(INVALID_DISCOVERY_XML));
+    Logon.execute(&client).await.unwrap();
     let error = DiscoveryQuery.execute(&client).await.unwrap_err();
 
     assert!(matches!(

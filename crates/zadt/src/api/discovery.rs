@@ -1,8 +1,8 @@
 use http::{Method, StatusCode};
 
 use crate::{
-    AdtRequest, AdtResponse, AdtUri, Capabilities, Client, Discovered, LoggedOn, LoggedOnState,
-    Operation, OperationError, ResponseError, Stateless, models::parse_capabilities,
+    AdtRequest, AdtResponse, AdtUri, Capabilities, Client, ClientState, Initial, Operation,
+    OperationError, Ready, ResponseError, Stateless, models::parse_capabilities,
     vocabulary::media_type,
 };
 
@@ -14,7 +14,7 @@ use crate::{
 /// and collections used by most ADT operations.
 ///
 /// The endpoint is known in advance, so this operation can execute with any
-/// [`LoggedOnState`]. Executing it returns [`Capabilities`] but does not perform
+/// [`ClientState`]. Executing it returns [`Capabilities`] but does not perform
 /// the [`Client::discover`] typestate transition.
 ///
 /// # Observed server handlers
@@ -26,7 +26,7 @@ use crate::{
 #[derive(Debug, Default)]
 pub struct CoreDiscoveryQuery;
 
-impl<S: LoggedOnState> Operation<S> for CoreDiscoveryQuery {
+impl<S: ClientState> Operation<S> for CoreDiscoveryQuery {
     type Response = Capabilities;
     type Kind = Stateless;
 
@@ -51,8 +51,8 @@ impl<S: LoggedOnState> Operation<S> for CoreDiscoveryQuery {
 /// types, and URI template links.
 ///
 /// The endpoint is known in advance, so this operation can execute with any
-/// [`LoggedOnState`]. [`Client::discover`] executes it and stores the resulting
-/// [`Capabilities`] while transitioning to [`Discovered`].
+/// [`ClientState`]. [`Client::discover`] executes it and stores the resulting
+/// [`Capabilities`] while transitioning to [`Ready`].
 ///
 /// # Observed server handlers
 ///
@@ -63,7 +63,7 @@ impl<S: LoggedOnState> Operation<S> for CoreDiscoveryQuery {
 #[derive(Debug, Default)]
 pub struct DiscoveryQuery;
 
-impl<S: LoggedOnState> Operation<S> for DiscoveryQuery {
+impl<S: ClientState> Operation<S> for DiscoveryQuery {
     type Response = Capabilities;
     type Kind = Stateless;
 
@@ -80,9 +80,9 @@ impl<S: LoggedOnState> Operation<S> for DiscoveryQuery {
     }
 }
 
-impl Client<LoggedOn> {
+impl Client<Initial> {
     /// Fetches central ADT discovery and returns a client carrying its capabilities.
-    pub async fn discover(self) -> Result<Client<Discovered>, OperationError> {
+    pub async fn discover(self) -> Result<Client<Ready>, OperationError> {
         let capabilities = DiscoveryQuery.execute(&self).await?;
         Ok(self.with_capabilities(capabilities))
     }

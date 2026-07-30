@@ -4,8 +4,8 @@ use httpmock::Mock;
 use httpmock::prelude::*;
 use zadt::{
     AccessMode, Client, Conditional, EntityTag, Include, IncludeProperties, IncludePropertyVersion,
-    ObjectType, ObjectVersion, Operation, Package, Program, ProgramProperties,
-    ProgramPropertiesVersion, ReqwestTransport,
+    Logon, ObjectType, ObjectVersion, Operation, Package, Program, ProgramProperties,
+    ProgramPropertiesVersion, Ready, ReqwestTransport,
 };
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
@@ -29,8 +29,14 @@ async fn mock_logon(server: &MockServer) -> Mock<'_> {
         .await
 }
 
+async fn ready_client(transport: ReqwestTransport) -> Client<Ready> {
+    let client = Client::new(transport);
+    Logon.execute(&client).await.unwrap();
+    client.discover().await.unwrap()
+}
+
 #[tokio::test]
-async fn program_run_uses_the_discovered_profiled_template() {
+async fn program_run_uses_the_advertised_profiled_template() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
     let discovery = server
@@ -69,13 +75,7 @@ async fn program_run_uses_the_discovered_profiled_template() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport)
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-        .unwrap();
+    let client = ready_client(transport).await;
     let program = client.object::<Program>("z_test").unwrap();
     let output = program
         .run()
@@ -137,13 +137,7 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport)
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-        .unwrap();
+    let client = ready_client(transport).await;
     let reference = client.object::<Include>("ZTEST").unwrap();
     let response = reference
         .query()
@@ -218,13 +212,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport)
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-        .unwrap();
+    let client = ready_client(transport).await;
     let reference = client.object::<Program>("Z_TEST").unwrap();
     let response = reference.query().execute(&client).await.unwrap();
     assert_eq!(response.media_version(), ProgramPropertiesVersion::V3);
@@ -386,13 +374,7 @@ async fn program_properties_query_honors_v2_first_priority() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport)
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-        .unwrap();
+    let client = ready_client(transport).await;
     let response = client
         .object::<Program>("Z_TEST")
         .unwrap()
@@ -444,13 +426,7 @@ async fn program_properties_query_returns_not_modified_for_a_current_etag() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport)
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-        .unwrap();
+    let client = ready_client(transport).await;
     let response = client
         .object::<Program>("Z_TEST")
         .unwrap()
@@ -578,13 +554,7 @@ async fn program_lock_and_update_share_one_user_session() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport)
-        .logon()
-        .await
-        .unwrap()
-        .discover()
-        .await
-        .unwrap();
+    let client = ready_client(transport).await;
     let program = client.object::<Program>("Z_ZIEGE_TEST").unwrap();
     let source = program.source().query().execute(&client).await.unwrap();
     let session = client.create_user_session();

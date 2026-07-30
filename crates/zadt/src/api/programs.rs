@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::properties::ObjectPropertiesQuery;
 use crate::{
     AdtUri, AdtUriError, CompatibilityError,
-    client::{Client, Discovered},
+    client::{Client, Ready},
     error::{ObjectError, OperationError, ResponseError},
     models::ProgramRunResult,
     objects::{Include, ObjectRef, Program},
@@ -49,11 +49,11 @@ pub struct ProgramRun {
     pub profiler_id: Option<String>,
 }
 
-impl Operation<Discovered> for ProgramRun {
+impl Operation<Ready> for ProgramRun {
     type Response = ProgramRunResult;
     type Kind = Stateless;
 
-    fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
+    fn request(&self, client: &Client<Ready>) -> Result<AdtRequest, OperationError> {
         let template = program_run_template(client)?;
         let uri_name = self.program.name().to_ascii_lowercase();
         let (target, query) =
@@ -93,7 +93,7 @@ impl ObjectRef<Program> {
 }
 
 // TODO: Move this to common utils or even into AdtResponse
-fn program_run_template(client: &Client<Discovered>) -> Result<&str, OperationError> {
+fn program_run_template(client: &Client<Ready>) -> Result<&str, OperationError> {
     let collection = client
         .collection(PROGRAM_RUN)
         .ok_or(CompatibilityError::MissingCollection(PROGRAM_RUN))?;
@@ -229,8 +229,6 @@ mod tests {
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
     const INCLUDE_XML: &str = include_str!("../../tests/fixtures/include-ztest.xml");
-    const SESSION_XML: &[u8] = include_bytes!("../../tests/fixtures/http-session-v3.xml");
-
     struct UnusedTransport;
 
     #[async_trait]
@@ -240,11 +238,8 @@ mod tests {
         }
     }
 
-    fn discovered_client(xml: &[u8]) -> Client<Discovered> {
+    fn ready_client(xml: &[u8]) -> Client<Ready> {
         Client::new(UnusedTransport)
-            .with_session_information(
-                crate::models::parse_session_information(SESSION_XML).unwrap(),
-            )
             .with_capabilities(crate::models::parse_capabilities(xml).unwrap())
     }
 
@@ -350,7 +345,7 @@ mod tests {
 
     #[test]
     fn program_run_request_requires_the_discovery_collection() {
-        let client = discovered_client(
+        let client = ready_client(
             br#"<app:service xmlns:app="http://www.w3.org/2007/app"
                     xmlns:atom="http://www.w3.org/2005/Atom">
                     <app:workspace><atom:title>Programs</atom:title></app:workspace>
@@ -367,7 +362,7 @@ mod tests {
 
     #[test]
     fn program_run_request_requires_the_relation_template() {
-        let client = discovered_client(
+        let client = ready_client(
             br#"<app:service xmlns:app="http://www.w3.org/2007/app"
                     xmlns:atom="http://www.w3.org/2005/Atom">
                     <app:workspace>

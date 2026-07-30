@@ -12,12 +12,12 @@ ADT exposes two AtomPub service documents with different roles:
 | `CoreDiscoveryQuery` | `/sap/bc/adt/core/discovery` | Small bootstrap document advertising infrastructure such as compatibility and batch resources. |
 | `DiscoveryQuery` | `/sap/bc/adt/discovery` | Central document advertising domain workspaces and collections such as programs. |
 
-Both operations have fixed URIs and require a logged-on client.
+Both operations have fixed URIs and can execute before central discovery.
 `CoreDiscoveryQuery` returns its capabilities without changing the client state.
-`Client::new()` creates an `Unauthenticated` client, `Client::logon()` establishes
-the HTTP security session and transitions it to `LoggedOn`, and
-`Client::discover()` executes `DiscoveryQuery` and stores its result while
-transitioning the client to `Discovered`.
+`Client::new()` creates an `Initial` client, and `Client::discover()` executes
+`DiscoveryQuery` and stores its result while transitioning the client to `Ready`.
+HTTP security-session establishment remains an explicit `Logon` operation and
+does not become client typestate.
 
 Discovery is the top-level capability map, not a complete description of
 every ADT interaction. Later resource representations can advertise
@@ -79,12 +79,12 @@ session. It deliberately excludes `sap-contextid`: that cookie identifies one
 SAP user session and is owned by the corresponding `UserSession`
 rather than shared across every request.
 
-A `UserSession` owns a cheap clone of its logged-on client, with session
-information and discovered capabilities shared through `Arc`. It therefore has
-no borrowing lifetime and can be stored for an entire editing workflow. Requests
-through one session are serialized and carry its latest `sap-contextid`;
-separate user sessions retain independent context IDs while sharing the client's
-HTTP security session.
+A `UserSession` owns a cheap clone of its client. The transport and any loaded
+capabilities remain shared through `Arc`, so the session has no borrowing
+lifetime and can be stored for an entire editing workflow. Requests through one
+session are serialized and carry its latest `sap-contextid`; separate user
+sessions retain independent context IDs while sharing the client's HTTP security
+session.
 Call `UserSession::close()` when the workflow finishes. Dropping an instance
 only releases local state and does not notify SAP.
 
@@ -139,17 +139,17 @@ execution capabilities:
 | Type | Represents | Created from |
 | --- | --- | --- |
 | `ObjectRef` | A type-erased repository-object identity and location, without implied capabilities | An erased typed reference or a parsed ADT representation |
-| `ObjectRef<T>` | An object identity tagged with a static `ObjectType` marker | `Client<Discovered>::object::<T>(name)` |
+| `ObjectRef<T>` | An object identity tagged with a static `ObjectType` marker | `Client<Ready>::object::<T>(name)` |
 | `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable reference such as `ObjectRef<Program>` |
-| `ObjectRef<Program>` | A typed ABAP program reference | `Client<Discovered>::object::<Program>(name)` |
-| `ObjectRef<Include>` | A typed standalone-include reference | `Client<Discovered>::object::<Include>(name)` |
-| `ObjectRef<Package>` | A typed ABAP package reference | An embedded package reference or `Client<Discovered>::object::<Package>(name)` |
+| `ObjectRef<Program>` | A typed ABAP program reference | `Client<Ready>::object::<Program>(name)` |
+| `ObjectRef<Include>` | A typed standalone-include reference | `Client<Ready>::object::<Include>(name)` |
+| `ObjectRef<Package>` | A typed ABAP package reference | An embedded package reference or `Client<Ready>::object::<Package>(name)` |
 | `OwnedResourceRef<T>` | Shared owner and link metadata for a typed relation reference | Relation resolution |
 | `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources plus their owning object | Fetched properties such as `ProgramProperties` |
 | `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
 
 Object-type markers provide their statically known category, allowing a
-discovered client to construct typed references without type-specific methods:
+ready client to construct typed references without type-specific methods:
 
 ```rust,ignore
 let program = client.object::<Program>("ZDEMO")?;
@@ -246,7 +246,7 @@ println!("{}", output.content);
 Program names are canonicalized to uppercase when their references are created.
 The operation is stateless, although its `POST` request still causes the HTTP
 transport to acquire a CSRF token. An optional profiler trace can be attached
-with `.profiler_id(id)` when the discovered template advertises that variable.
+with `.profiler_id(id)` when the selected template advertises that variable.
 Selection-screen parameters are not supported by this endpoint.
 
 ## Include properties

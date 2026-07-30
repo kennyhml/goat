@@ -1,7 +1,7 @@
 use http::{Method, StatusCode, header};
 
 use crate::{
-    client::{Client, Discovered},
+    client::{Client, Ready},
     compatibility::{CompatibilityError, NegotiableMediaVersion},
     error::{OperationError, ResponseError},
     objects::{ObjectProperties, ObjectRef, ObjectVersion},
@@ -75,7 +75,7 @@ where
     }
 }
 
-impl<T, M> Operation<Discovered> for ObjectPropertiesQuery<T, M>
+impl<T, M> Operation<Ready> for ObjectPropertiesQuery<T, M>
 where
     T: ObjectProperties,
     M: QueryMode<T::Properties>,
@@ -83,7 +83,7 @@ where
     type Response = M::Response;
     type Kind = Stateless;
 
-    fn request(&self, client: &Client<Discovered>) -> Result<AdtRequest, OperationError> {
+    fn request(&self, client: &Client<Ready>) -> Result<AdtRequest, OperationError> {
         let collection = client
             .collection(T::CATEGORY)
             .ok_or(CompatibilityError::MissingCollection(T::CATEGORY))?;

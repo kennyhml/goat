@@ -1,7 +1,7 @@
 use std::{env, error::Error, io, time::Duration};
 
 use tokio::time::sleep;
-use zadt::{Client, Operation, Package, Program, ProgramProperties, ReqwestTransport};
+use zadt::{Client, Logon, Operation, Package, Program, ProgramProperties, ReqwestTransport};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -19,7 +19,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .language(language)
         .basic_auth(username, password)
         .build()?;
-    let client = Client::new(transport).logon().await?.discover().await?;
+    let client = Client::new(transport);
+    Logon.execute(&client).await?;
+    let client = client.discover().await?;
 
     let pkg = client.object::<Package>("/DMO/FLIGHT")?;
 

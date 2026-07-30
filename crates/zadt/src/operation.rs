@@ -5,8 +5,8 @@ use http::{HeaderMap, HeaderValue, header};
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::{
-    AdtRequest, AdtResponse, Client, ClientState, EntityTag, LoggedOnState, OperationError,
-    ResponseError, TransportError,
+    AdtRequest, AdtResponse, Client, ClientState, EntityTag, OperationError, ResponseError,
+    TransportError,
 };
 
 const ADT_SESSION_TYPE: &str = "x-sap-adt-sessiontype";
@@ -132,7 +132,7 @@ where
 /// A user session can retain locks and other server resources. Call
 /// [`UserSession::close`] when the workflow finishes; dropping this value only
 /// releases local state and does not notify SAP.
-pub struct UserSession<S: LoggedOnState> {
+pub struct UserSession<S: ClientState> {
     client: Client<S>,
     state: Mutex<UserSessionState>,
 }
@@ -153,7 +153,7 @@ where
 // Execution of a stateful request
 impl<S, O> Executor<S, O> for UserSession<S>
 where
-    S: LoggedOnState,
+    S: ClientState,
     O: Operation<S, Kind = Stateful>,
 {
     async fn execute(&self, operation: &O) -> Result<O::Response, OperationError> {
@@ -316,7 +316,7 @@ impl UserSessionState {
 
 impl<S> UserSession<S>
 where
-    S: LoggedOnState,
+    S: ClientState,
 {
     pub(crate) fn new(client: Client<S>) -> Self {
         Self {
@@ -373,17 +373,15 @@ mod tests {
     use http::{HeaderMap, Method, StatusCode};
 
     use super::*;
-    use crate::{AdtUri, LoggedOn, Transport, models::parse_session_information};
-
-    const SESSION_XML: &[u8] = include_bytes!("../tests/fixtures/http-session-v3.xml");
+    use crate::{AdtUri, Initial, Transport};
 
     struct StatefulProbe;
 
-    impl Operation<LoggedOn> for StatefulProbe {
+    impl Operation<Initial> for StatefulProbe {
         type Response = ();
         type Kind = Stateful;
 
-        fn request(&self, _client: &Client<LoggedOn>) -> Result<AdtRequest, OperationError> {
+        fn request(&self, _client: &Client<Initial>) -> Result<AdtRequest, OperationError> {
             Ok(AdtRequest::new(
                 Method::GET,
                 AdtUri::parse("/sap/bc/adt/stateful-probe").unwrap(),
@@ -437,9 +435,7 @@ mod tests {
                 AdtResponse::new(StatusCode::OK, HeaderMap::new(), Vec::new()),
             ])),
         };
-        let session = Client::new(transport)
-            .with_session_information(parse_session_information(SESSION_XML).unwrap())
-            .create_user_session();
+        let session = Client::new(transport).create_user_session();
 
         fn assert_static<T: 'static>(_value: &T) {}
         assert_static(&session);

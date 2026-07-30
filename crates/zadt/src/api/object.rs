@@ -2,7 +2,7 @@ use derive_builder::Builder;
 use http::{Method, StatusCode};
 
 use crate::{
-    client::{Client, LoggedOnState},
+    client::{Client, ClientState},
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
     objects::{ObjectRef, ObjectType, Source},
@@ -20,7 +20,7 @@ pub struct ObjectSourceQuery {
     pub source: SourceRef,
 }
 
-impl<S: LoggedOnState> Operation<S> for ObjectSourceQuery {
+impl<S: ClientState> Operation<S> for ObjectSourceQuery {
     type Response = SourceCode;
     type Kind = Stateless;
 
@@ -105,7 +105,7 @@ impl LockRequest {
     }
 }
 
-impl<S: LoggedOnState> Operation<S> for LockRequest {
+impl<S: ClientState> Operation<S> for LockRequest {
     type Response = LockHandle;
     type Kind = Stateful;
 
@@ -138,7 +138,7 @@ impl UnlockRequest {
     }
 }
 
-impl<S: LoggedOnState> Operation<S> for UnlockRequest {
+impl<S: ClientState> Operation<S> for UnlockRequest {
     type Response = ();
     type Kind = Stateful;
 
@@ -186,7 +186,7 @@ impl ObjectSourceUpdateBuilder {
     }
 }
 
-impl<S: LoggedOnState> Operation<S> for ObjectSourceUpdate {
+impl<S: ClientState> Operation<S> for ObjectSourceUpdate {
     type Response = ();
     type Kind = Stateful;
 
@@ -246,13 +246,13 @@ mod tests {
     use crate::{ObjectRef, Program};
 
     #[test]
-    fn object_operations_require_logon_but_not_discovery() {
-        fn accepts_logged_on<O: Operation<crate::LoggedOn>>() {}
+    fn object_operations_do_not_require_discovery() {
+        fn accepts_initial<O: Operation<crate::Initial>>() {}
 
-        accepts_logged_on::<ObjectSourceQuery>();
-        accepts_logged_on::<LockRequest>();
-        accepts_logged_on::<UnlockRequest>();
-        accepts_logged_on::<ObjectSourceUpdate>();
+        accepts_initial::<ObjectSourceQuery>();
+        accepts_initial::<LockRequest>();
+        accepts_initial::<UnlockRequest>();
+        accepts_initial::<ObjectSourceUpdate>();
     }
 
     #[test]

@@ -3,13 +3,13 @@
 use std::time::Duration;
 
 use httpmock::prelude::*;
-use zadt::{Client, LogonError, OperationError, ReqwestTransport, ResponseError};
+use zadt::{Client, Logon, LogonError, Operation, OperationError, ReqwestTransport, ResponseError};
 
 const SESSION_XML: &str = include_str!("fixtures/http-session-v3.xml");
 const SESSION_MEDIA_TYPE: &str = "application/vnd.sap.adt.core.http.session.v3+xml";
 
 #[tokio::test]
-async fn logon_sends_the_v3_contract_and_retains_session_information() {
+async fn logon_sends_the_v3_contract_and_returns_session_information() {
     let server = MockServer::start_async().await;
     let logon = server
         .mock_async(|when, then| {
@@ -36,8 +36,8 @@ async fn logon_sends_the_v3_contract_and_retains_session_information() {
         .build()
         .unwrap();
 
-    let client = Client::new(transport).logon().await.unwrap();
-    let session = client.session_information();
+    let client = Client::new(transport);
+    let session = Logon.execute(&client).await.unwrap();
 
     assert_eq!(session.logoff_uri.as_str(), "/sap/public/bc/icf/logoff");
     assert_eq!(
@@ -74,7 +74,8 @@ async fn logon_rejects_legacy_session_representations() {
         .build()
         .unwrap();
 
-    let error = match Client::new(transport).logon().await {
+    let client = Client::new(transport);
+    let error = match Logon.execute(&client).await {
         Ok(_) => panic!("legacy session representation was accepted"),
         Err(error) => error,
     };

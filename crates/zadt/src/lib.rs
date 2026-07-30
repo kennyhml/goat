@@ -25,7 +25,7 @@ pub use api::programs::{
 };
 pub use api::properties::ObjectPropertiesQuery;
 pub use api::session::{Logon, SessionMediaVersion};
-pub use client::{Client, ClientState, Discovered, LoggedOn, LoggedOnState, Unauthenticated};
+pub use client::{Client, ClientState, Initial, Ready};
 pub use compatibility::{CompatibilityError, NegotiableMediaVersion, negotiate};
 #[cfg(feature = "reqwest")]
 pub use error::ReqwestTransportBuildError;

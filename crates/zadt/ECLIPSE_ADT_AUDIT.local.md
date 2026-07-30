@@ -1035,22 +1035,21 @@ Class-specific models and parsers must remain separate. Class source and
 
 ## Ziege Architecture Recommendations
 
-### Explicit Initial Logon State
+### Client Readiness State
 
 Recommended lifecycle:
 
 ```text
-Client<Unauthenticated>
-  -> logon()
-Client<LoggedOn>
+Client<Initial>
   -> discover()
-Client<Discovered>
+Client<Ready>
 ```
 
-`Discovered` remains logged on. Normal operations should require a
-`LoggedOnState` capability.
+The initial state is now named `Initial`; `Ready` proves only that a local
+central-discovery snapshot is available. Authentication liveness is not client
+typestate because a remote session can expire independently of the Rust value.
 
-Initial logon should be explicit because it can:
+Initial HTTP logon remains an explicit protocol operation because it can:
 
 - Fail credentials.
 - Open a browser for SSO.
@@ -1058,7 +1057,7 @@ Initial logon should be explicit because it can:
 - Establish lifecycle and cleanup links.
 - Produce meaningful session metadata.
 
-Automatic behavior after initial logon should include:
+Authentication and recovery belong to each transport. HTTP behavior can include:
 
 - Cookie reuse.
 - Load-balancer affinity.
@@ -1067,7 +1066,7 @@ Automatic behavior after initial logon should include:
 - Inactivity/session bookkeeping.
 
 Discovery need not be one-shot. `DiscoveryQuery` can work for every
-`LoggedOnState`, with `rediscover()` or `refresh_capabilities()` replacing the
+`ClientState`, with `rediscover()` or `refresh_capabilities()` replacing the
 stored capabilities.
 
 ### Communication Priorities

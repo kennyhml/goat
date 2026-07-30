@@ -2,7 +2,7 @@ use std::{any::Any, fmt, hash::Hash, marker::PhantomData};
 
 use crate::{
     AccessMode, LockHandle, LockRequest, UnlockRequest,
-    client::{Client, Discovered},
+    client::{Client, Ready},
     compatibility::CompatibilityError,
     error::ObjectError,
     uri::AdtUri,
@@ -194,11 +194,11 @@ impl<T> fmt::Display for ObjectRef<T> {
     }
 }
 
-impl Client<Discovered> {
+impl Client<Ready> {
     /// Resolves a typed object reference from its statically known collection.
     ///
     /// Constructing a reference performs no request; the collection URI comes
-    /// from the capabilities already retained by the discovered client.
+    /// from the capabilities already retained by the ready client.
     pub fn object<T: ObjectType>(&self, name: &str) -> Result<ObjectRef<T>, ObjectError> {
         T::NAMING_POLICY.validate(name)?;
         let name = name.to_ascii_uppercase();

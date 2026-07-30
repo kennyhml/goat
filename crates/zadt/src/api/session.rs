@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use http::{HeaderValue, Method, StatusCode, header};
 
 use crate::{
-    AdtRequest, AdtResponse, AdtUri, Client, LogonError, NegotiableMediaVersion, Operation,
-    OperationError, ResponseError, SessionInformation, Stateless, Unauthenticated,
+    AdtRequest, AdtResponse, AdtUri, Client, ClientState, LogonError, NegotiableMediaVersion,
+    Operation, OperationError, ResponseError, SessionInformation, Stateless,
     models::parse_session_information,
     vocabulary::{
         CANCEL_ON_CLOSE_HEADER, LOAD_BALANCER_HEADER, PURPOSE_HEADER, SECURITY_SESSION_HEADER,
@@ -28,6 +28,9 @@ impl NegotiableMediaVersion for SessionMediaVersion {
 }
 
 /// Establishes an authenticated ADT HTTP security session.
+///
+/// This HTTP-specific operation returns the advertised [`SessionInformation`]
+/// without changing client typestate.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Logon;
 
@@ -35,11 +38,11 @@ impl Logon {
     const HTTP_SESSIONS_URI: &str = "/sap/bc/adt/core/http/sessions";
 }
 
-impl Operation<Unauthenticated> for Logon {
+impl<S: ClientState> Operation<S> for Logon {
     type Response = SessionInformation;
     type Kind = Stateless;
 
-    fn request(&self, _client: &Client<Unauthenticated>) -> Result<AdtRequest, OperationError> {
+    fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
         let target = AdtUri::parse(Self::HTTP_SESSIONS_URI)
             .expect("the HTTP sessions target is a valid static ADT URI");
         let mut request = AdtRequest::new(Method::GET, target);
@@ -84,14 +87,6 @@ impl Operation<Unauthenticated> for Logon {
             .into());
         }
         parse_session_information(response.body()).map_err(Into::into)
-    }
-}
-
-impl Client<Unauthenticated> {
-    /// Establishes an authenticated HTTP security session.
-    pub async fn logon(self) -> Result<crate::Client<crate::LoggedOn>, OperationError> {
-        let session_information = Logon.execute(&self).await?;
-        Ok(self.with_session_information(session_information))
     }
 }
 
