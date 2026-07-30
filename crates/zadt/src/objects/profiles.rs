@@ -23,8 +23,8 @@ impl ObjectType for Package {
         scheme: "http://www.sap.com/wbobj/packages",
         term: "devck",
     };
-    const TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("DEVC", "K");
-    const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
+    const WORKBENCH_TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("DEVC", "K");
+    const NAMING_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
 }
 
 // TODO: package object properties
@@ -35,8 +35,8 @@ pub enum Program {}
 
 impl ObjectType for Program {
     const CATEGORY: CategoryId = PROGRAMS;
-    const TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("PROG", "P");
-    const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
+    const WORKBENCH_TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("PROG", "P");
+    const NAMING_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
 }
 
 impl Source for Program {}
@@ -61,8 +61,8 @@ pub enum Include {}
 
 impl ObjectType for Include {
     const CATEGORY: CategoryId = INCLUDES;
-    const TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("PROG", "I");
-    const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(40);
+    const WORKBENCH_TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("PROG", "I");
+    const NAMING_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(40);
 }
 
 impl Source for Include {}

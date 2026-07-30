@@ -663,9 +663,9 @@ struct RawPackage {
 }
 
 fn package_reference(raw: RawPackage) -> Result<ObjectRef<Package>, ObjectError> {
-    if raw.object_type != Package::TYPE {
+    if raw.object_type != Package::WORKBENCH_TYPE {
         return Err(ObjectError::UnexpectedObjectType {
-            expected: Package::TYPE,
+            expected: Package::WORKBENCH_TYPE,
             actual: raw.object_type,
         });
     }

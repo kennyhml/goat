@@ -1,4 +1,4 @@
-use std::{any::Any, borrow::Cow, fmt, hash::Hash, marker::PhantomData, str::FromStr};
+use std::{any::Any, fmt, hash::Hash, marker::PhantomData};
 
 use url::Url;
 
@@ -15,147 +15,16 @@ mod capabilities;
 mod policies;
 mod profiles;
 mod version;
+mod workbench;
 
 pub use capabilities::{ObjectProperties, Source};
 pub use policies::ObjectNamePolicy;
 pub use profiles::{Include, Package, Program};
 pub use version::ObjectVersion;
+pub use workbench::{GlobalWorkbenchType, InvalidWorkbenchType};
 
 pub(crate) mod private {
     pub trait Sealed {}
-}
-
-/// A global ABAP Workbench type consisting of an R3TR object-directory type and
-/// an internal Workbench subtype.
-///
-/// # Background
-///
-/// A repository object generally has an entry in the object directory (`TADIR`)
-/// with program ID `R3TR`. In contrast, `LIMU` identifies transportable
-/// subobjects recorded in transport requests - those subobjects generally do not
-/// have independent `TADIR` entries.
-///
-/// The R3TR object type identifies the owning repository object family, such as
-/// `PROG`, `CLAS`, or `DDLS`. It does not by itself identify the particular
-/// Workbench view or subobject.
-///
-/// Workbench subtypes are shorter internal identifiers defined by type pool
-/// `SWBM` and registered in `WBOBJTYPES` and `WBOBJTYPT`. The `WBOBJTYPE`
-/// structure combines the R3TR type in `OBJTYPE_TR` with the internal subtype in
-/// `SUBTYPE_WB`. Workbench objects can map to transportable entities through
-/// type-specific behavior that can be observed in `CL_WB_OBJECT`.
-///
-/// Much of this is an implementation detail. A global class has type `CLAS/OC`,
-/// while one of its method implementations has type `CLAS/OM`. The method source
-/// may be persisted in a generated include such as `ZCL_DEMO_A_SET_TO_PAID========CM001`
-/// in `REPOSRC`. That generated program is an include at the program-storage layer,
-/// but the method's Workbench subtype remains `OM` it is not exposed as subtype `I`,
-/// nor does it gain a `TADIR` entry.
-///
-/// ADT serializes this pair with a slash, for example `PROG/P`, `PROG/I`, or
-/// `CLAS/OC`. Values use their unpadded wire representation rather than the
-/// trailing spaces of SAPs fixed-width `TROBJTYPE` and `SEU_OBJTYP` fields.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Deserialize)]
-#[serde(try_from = "String")]
-pub struct GlobalWorkbenchType {
-    directory_type: Cow<'static, str>,
-    workbench_type: Cow<'static, str>,
-}
-
-impl GlobalWorkbenchType {
-    /// Creates a global Workbench type from an R3TR object directory type and
-    /// internal Workbench subtype.
-    ///
-    /// Both values must be ASCII. The directory type is limited to the four
-    /// characters of `TROBJTYPE`, and the Workbench type to the three
-    /// characters of `SEU_OBJTYP`.
-    pub const fn new(directory_type: &'static str, workbench_type: &'static str) -> Self {
-        assert!(directory_type.is_ascii(), "R3TR object type must be ASCII");
-        assert!(
-            directory_type.len() <= 4,
-            "R3TR object type exceeds 4 characters"
-        );
-        assert!(workbench_type.is_ascii(), "Workbench type must be ASCII");
-        assert!(
-            workbench_type.len() <= 3,
-            "Workbench type exceeds 3 characters"
-        );
-        Self {
-            directory_type: Cow::Borrowed(directory_type),
-            workbench_type: Cow::Borrowed(workbench_type),
-        }
-    }
-
-    /// Returns the R3TR object type used in the object directory.
-    pub fn directory_type(&self) -> &str {
-        &self.directory_type
-    }
-
-    /// Returns the internal ABAP Workbench type.
-    pub fn workbench_type(&self) -> &str {
-        &self.workbench_type
-    }
-}
-
-impl fmt::Display for GlobalWorkbenchType {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}/{}", self.directory_type, self.workbench_type)
-    }
-}
-
-/// An error parsing an ADT global Workbench type such as `PROG/I`.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("invalid global Workbench type `{value}`: {reason}")]
-pub struct GlobalWorkbenchTypeParseError {
-    value: String,
-    reason: &'static str,
-}
-
-impl FromStr for GlobalWorkbenchType {
-    type Err = GlobalWorkbenchTypeParseError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let invalid = |reason| GlobalWorkbenchTypeParseError {
-            value: value.to_owned(),
-            reason,
-        };
-        let (directory_type, workbench_type) = value
-            .split_once('/')
-            .ok_or_else(|| invalid("expected `<R3TR type>/<Workbench type>`"))?;
-        if directory_type.is_empty() {
-            return Err(invalid("R3TR object type is empty"));
-        }
-        if workbench_type.is_empty() {
-            return Err(invalid("Workbench type is empty"));
-        }
-        if workbench_type.contains('/') {
-            return Err(invalid("contains more than one separator"));
-        }
-        if !directory_type.is_ascii() {
-            return Err(invalid("R3TR object type must be ASCII"));
-        }
-        if directory_type.len() > 4 {
-            return Err(invalid("R3TR object type exceeds 4 characters"));
-        }
-        if !workbench_type.is_ascii() {
-            return Err(invalid("Workbench type must be ASCII"));
-        }
-        if workbench_type.len() > 3 {
-            return Err(invalid("Workbench type exceeds 3 characters"));
-        }
-        Ok(Self {
-            directory_type: Cow::Owned(directory_type.to_owned()),
-            workbench_type: Cow::Owned(workbench_type.to_owned()),
-        })
-    }
-}
-
-impl TryFrom<String> for GlobalWorkbenchType {
-    type Error = GlobalWorkbenchTypeParseError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        value.parse()
-    }
 }
 
 /// Statically identified ADT object resource family.
@@ -168,10 +37,10 @@ pub trait ObjectType: private::Sealed + Send + Sync + Sized + 'static {
     const CATEGORY: CategoryId;
 
     /// The objects global Workbench type.
-    const TYPE: GlobalWorkbenchType;
+    const WORKBENCH_TYPE: GlobalWorkbenchType;
 
     /// The objects naming constraints.
-    const NAME_POLICY: ObjectNamePolicy;
+    const NAMING_POLICY: ObjectNamePolicy;
 }
 
 /// Type-erased operations and metadata shared by repository objects.
@@ -201,11 +70,11 @@ where
     }
 
     fn naming_policy(&self) -> ObjectNamePolicy {
-        T::NAME_POLICY
+        T::NAMING_POLICY
     }
 
     fn workbench_type(&self) -> GlobalWorkbenchType {
-        T::TYPE
+        T::WORKBENCH_TYPE
     }
 
     fn lock(&self, access_mode: AccessMode) -> LockRequest {
@@ -282,7 +151,7 @@ impl<T: ObjectType> ObjectRef<T> {
     }
 
     pub(crate) fn from_parts(name: String, uri: AdtUri) -> Result<Self, ObjectError> {
-        T::NAME_POLICY.validate(&name)?;
+        T::NAMING_POLICY.validate(&name)?;
 
         // TODO: Dont always uppercase!
         Ok(Self::typed(name.to_ascii_uppercase(), uri))
@@ -337,7 +206,7 @@ impl Client<Discovered> {
     /// Constructing a reference performs no request; the collection URI comes
     /// from the capabilities already retained by the discovered client.
     pub fn object<T: ObjectType>(&self, name: &str) -> Result<ObjectRef<T>, ObjectError> {
-        T::NAME_POLICY.validate(name)?;
+        T::NAMING_POLICY.validate(name)?;
         let name = name.to_ascii_uppercase();
         let uri_name = name.to_ascii_lowercase();
         let collection = self
@@ -376,8 +245,8 @@ mod tests {
         assert_eq!(object_type.directory_type(), "ABCD");
         assert_eq!(object_type.workbench_type(), "XYZ");
         assert_eq!(object_type.to_string(), "ABCD/XYZ");
-        assert_eq!(Program::TYPE.to_string(), "PROG/P");
-        assert_eq!(Include::TYPE.to_string(), "PROG/I");
+        assert_eq!(Program::WORKBENCH_TYPE.to_string(), "PROG/P");
+        assert_eq!(Include::WORKBENCH_TYPE.to_string(), "PROG/I");
     }
 
     #[test]
@@ -420,13 +289,13 @@ mod tests {
 
     #[test]
     fn object_name_policies_enforce_type_specific_limits() {
-        assert_eq!(Program::NAME_POLICY.maximum_length(), 30);
-        assert_eq!(Include::NAME_POLICY.maximum_length(), 40);
-        assert!(Program::NAME_POLICY.validate(&"A".repeat(30)).is_ok());
-        assert!(Include::NAME_POLICY.validate(&"A".repeat(40)).is_ok());
+        assert_eq!(Program::NAMING_POLICY.maximum_length(), 30);
+        assert_eq!(Include::NAMING_POLICY.maximum_length(), 40);
+        assert!(Program::NAMING_POLICY.validate(&"A".repeat(30)).is_ok());
+        assert!(Include::NAMING_POLICY.validate(&"A".repeat(40)).is_ok());
 
         let name = "A".repeat(31);
-        let error = Program::NAME_POLICY.validate(&name).unwrap_err();
+        let error = Program::NAMING_POLICY.validate(&name).unwrap_err();
         assert!(matches!(
             error,
             ObjectError::NameTooLong {
@@ -459,7 +328,7 @@ mod tests {
         let request = object.lock(AccessMode::Modify);
 
         assert_eq!(request.object, program.erase());
-        assert_eq!(object.workbench_type(), Program::TYPE);
+        assert_eq!(object.workbench_type(), Program::WORKBENCH_TYPE);
         assert!(object.downcast_ref::<Program>().is_some());
         assert!(object.downcast_ref::<Include>().is_none());
     }

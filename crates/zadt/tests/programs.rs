@@ -242,7 +242,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     assert!(program.fix_point_arithmetic);
     assert!(program.unicode_check_active);
     assert_eq!(program.package.name(), "$TMP");
-    assert_eq!(Package::TYPE.to_string(), "DEVC/K");
+    assert_eq!(Package::WORKBENCH_TYPE.to_string(), "DEVC/K");
     assert_eq!(
         program.package.uri().as_str(),
         "/sap/bc/adt/packages/%24tmp"
