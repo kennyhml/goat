@@ -1,6 +1,5 @@
 use super::{
-    GlobalWorkbenchType, Lock, ObjectNamePolicy, ObjectProperties, ObjectRef, ObjectType, Source,
-    private,
+    GlobalWorkbenchType, ObjectNamePolicy, ObjectProperties, ObjectRef, ObjectType, Source, private,
 };
 use crate::{
     error::ResponseError,
@@ -28,7 +27,6 @@ impl ObjectType for Package {
     const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
 }
 
-impl Lock for Package {}
 // TODO: package object properties
 
 /// The ABAP program object type.
@@ -41,7 +39,6 @@ impl ObjectType for Program {
     const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
 }
 
-impl Lock for Program {}
 impl Source for Program {}
 
 impl ObjectProperties for Program {
@@ -68,7 +65,6 @@ impl ObjectType for Include {
     const NAME_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(40);
 }
 
-impl Lock for Include {}
 impl Source for Include {}
 
 impl ObjectProperties for Include {

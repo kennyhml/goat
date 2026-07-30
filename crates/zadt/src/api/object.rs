@@ -5,7 +5,7 @@ use crate::{
     client::{Client, LoggedOnState},
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
-    objects::{Lock, ObjectRef, Source, append_segments},
+    objects::{ObjectRef, ObjectType, Source, append_segments},
     operation::{Operation, Stateful, Stateless},
     protocol::{AdtRequest, AdtResponse},
     resource::SourceRef,
@@ -51,7 +51,8 @@ impl AccessMode {
     }
 }
 
-impl<T: Lock> ObjectRef<T> {
+// Every statically identified object supports locking.
+impl<T: ObjectType> ObjectRef<T> {
     /// Creates an object-lock operation.
     pub fn lock(&self, access_mode: AccessMode) -> LockRequest {
         LockRequest::new(self.erase(), access_mode)

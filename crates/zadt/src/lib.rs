@@ -40,8 +40,9 @@ pub use models::{
     TemplateLink, Workspace,
 };
 pub use objects::{
-    GlobalWorkbenchType, GlobalWorkbenchTypeParseError, Include, Lock, ObjectNamePolicy,
-    ObjectProperties, ObjectRef, ObjectType, ObjectVersion, Package, Program, Source,
+    GlobalWorkbenchType, GlobalWorkbenchTypeParseError, Include, ObjectNamePolicy,
+    ObjectProperties, ObjectRef, ObjectType, ObjectVersion, Package, Program, RepositoryObject,
+    Source,
 };
 pub use operation::{
     Conditional, Executor, IfNoneMatch, Operation, OperationKind, QueryMode, Stateful, Stateless,

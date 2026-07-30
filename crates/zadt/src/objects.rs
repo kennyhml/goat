@@ -1,8 +1,9 @@
-use std::{borrow::Cow, fmt, hash::Hash, marker::PhantomData, str::FromStr};
+use std::{any::Any, borrow::Cow, fmt, hash::Hash, marker::PhantomData, str::FromStr};
 
 use url::Url;
 
 use crate::{
+    AccessMode, LockHandle, LockRequest, UnlockRequest,
     client::{Client, Discovered},
     compatibility::CompatibilityError,
     error::ObjectError,
@@ -15,7 +16,7 @@ mod policies;
 mod profiles;
 mod version;
 
-pub use capabilities::{Lock, ObjectProperties, Source};
+pub use capabilities::{ObjectProperties, Source};
 pub use policies::ObjectNamePolicy;
 pub use profiles::{Include, Package, Program};
 pub use version::ObjectVersion;
@@ -171,6 +172,57 @@ pub trait ObjectType: private::Sealed + Send + Sync + Sized + 'static {
 
     /// The objects naming constraints.
     const NAME_POLICY: ObjectNamePolicy;
+}
+
+/// Type-erased operations and metadata shared by repository objects.
+pub trait RepositoryObject: Any + Send + Sync {
+    /// Returns the discovery category for this object type.
+    fn category(&self) -> CategoryId;
+
+    /// Returns the naming constraints for this object type.
+    fn naming_policy(&self) -> ObjectNamePolicy;
+
+    /// Returns the object's global Workbench type.
+    fn workbench_type(&self) -> GlobalWorkbenchType;
+
+    /// Creates an object-lock operation.
+    fn lock(&self, access_mode: AccessMode) -> LockRequest;
+
+    /// Creates an operation that releases this object's lock.
+    fn unlock(&self, lock_handle: LockHandle) -> Result<UnlockRequest, ObjectError>;
+}
+
+impl<T> RepositoryObject for ObjectRef<T>
+where
+    T: ObjectType,
+{
+    fn category(&self) -> CategoryId {
+        T::CATEGORY
+    }
+
+    fn naming_policy(&self) -> ObjectNamePolicy {
+        T::NAME_POLICY
+    }
+
+    fn workbench_type(&self) -> GlobalWorkbenchType {
+        T::TYPE
+    }
+
+    fn lock(&self, access_mode: AccessMode) -> LockRequest {
+        ObjectRef::<T>::lock(self, access_mode)
+    }
+
+    fn unlock(&self, lock_handle: LockHandle) -> Result<UnlockRequest, ObjectError> {
+        ObjectRef::<T>::unlock(self, lock_handle)
+    }
+}
+
+impl dyn RepositoryObject + '_ {
+    /// Attempts to recover a statically typed object reference.
+    pub fn downcast_ref<T: ObjectType>(&self) -> Option<&ObjectRef<T>> {
+        let any: &dyn Any = self;
+        any.downcast_ref()
+    }
 }
 
 /// A validated ADT object identity, optionally tagged with its static object type.
@@ -394,5 +446,21 @@ mod tests {
                 .as_str(),
             "/sap/bc/adt/programs/programs/%2FDMO%2FPROGRAM"
         );
+    }
+
+    #[test]
+    fn repository_object_dispatches_locking_and_downcasts() {
+        let program = ObjectRef::<Program>::for_test(
+            "Z_TEST",
+            AdtUri::parse("/sap/bc/adt/programs/programs/Z_TEST").unwrap(),
+        );
+        let object: &dyn RepositoryObject = &program;
+
+        let request = object.lock(AccessMode::Modify);
+
+        assert_eq!(request.object, program.erase());
+        assert_eq!(object.workbench_type(), Program::TYPE);
+        assert!(object.downcast_ref::<Program>().is_some());
+        assert!(object.downcast_ref::<Include>().is_none());
     }
 }
