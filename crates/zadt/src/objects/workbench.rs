@@ -1,8 +1,6 @@
 use core::fmt;
 use std::{borrow::Cow, str::FromStr};
 
-use serde;
-
 /// A global ABAP Workbench type consisting of an R3TR object-directory type and
 /// an internal Workbench subtype.
 ///
@@ -133,5 +131,60 @@ impl TryFrom<String> for GlobalWorkbenchType {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         value.parse()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Include, ObjectType, Program};
+
+    #[test]
+    fn global_workbench_types_use_unpadded_sap_field_limits() {
+        let object_type = GlobalWorkbenchType::new("ABCD", "XYZ");
+
+        assert_eq!(object_type.directory_type(), "ABCD");
+        assert_eq!(object_type.workbench_type(), "XYZ");
+        assert_eq!(object_type.to_string(), "ABCD/XYZ");
+        assert_eq!(Program::WORKBENCH_TYPE.to_string(), "PROG/P");
+        assert_eq!(Include::WORKBENCH_TYPE.to_string(), "PROG/I");
+    }
+
+    #[test]
+    fn parses_an_owned_global_workbench_type() {
+        let object_type: GlobalWorkbenchType = "CLAS/OM".parse().unwrap();
+
+        assert_eq!(object_type.directory_type(), "CLAS");
+        assert_eq!(object_type.workbench_type(), "OM");
+        assert_eq!(object_type.to_string(), "CLAS/OM");
+    }
+
+    #[test]
+    fn rejects_invalid_global_workbench_type_responses() {
+        for value in [
+            "CLAS",
+            "/OM",
+            "CLAS/",
+            "CLAS/OM/X",
+            "TOOLONG/X",
+            "CLAS/LONG",
+        ] {
+            assert!(
+                value.parse::<GlobalWorkbenchType>().is_err(),
+                "accepted {value}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "R3TR object type exceeds 4 characters")]
+    fn global_workbench_type_rejects_an_oversized_directory_type() {
+        GlobalWorkbenchType::new("ABCDE", "X");
+    }
+
+    #[test]
+    #[should_panic(expected = "Workbench type exceeds 3 characters")]
+    fn global_workbench_type_rejects_an_oversized_internal_type() {
+        GlobalWorkbenchType::new("ABCD", "WXYZ");
     }
 }

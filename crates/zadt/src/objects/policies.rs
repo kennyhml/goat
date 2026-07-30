@@ -39,3 +39,26 @@ impl ObjectNamePolicy {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{Include, ObjectError, ObjectType, Program};
+
+    #[test]
+    fn object_name_policies_enforce_type_specific_limits() {
+        assert_eq!(Program::NAMING_POLICY.maximum_length(), 30);
+        assert_eq!(Include::NAMING_POLICY.maximum_length(), 40);
+        assert!(Program::NAMING_POLICY.validate(&"A".repeat(30)).is_ok());
+        assert!(Include::NAMING_POLICY.validate(&"A".repeat(40)).is_ok());
+
+        let name = "A".repeat(31);
+        let error = Program::NAMING_POLICY.validate(&name).unwrap_err();
+        assert!(matches!(
+            error,
+            ObjectError::NameTooLong {
+                name: rejected,
+                maximum_length: 30,
+            } if rejected == name
+        ));
+    }
+}

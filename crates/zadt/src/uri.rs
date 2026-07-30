@@ -57,6 +57,23 @@ impl AdtUri {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn append_segments<I, S>(&self, segments: I) -> Result<Self, AdtUriError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut url = Url::parse(&format!("{VALIDATION_ORIGIN}{}", self.as_str()))
+            .expect("a validated ADT URI forms a valid URL");
+        url.path_segments_mut()
+            .expect("an HTTP URL supports path segments")
+            .extend(
+                segments
+                    .into_iter()
+                    .map(|segment| segment.as_ref().to_owned()),
+            );
+        Self::parse(url.path())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -130,5 +147,18 @@ mod tests {
         ] {
             assert!(AdtUri::parse(target).is_err(), "accepted {target}");
         }
+    }
+
+    #[test]
+    fn encodes_appended_values_as_single_path_segments() {
+        let collection = AdtUri::parse("/sap/bc/adt/programs/programs").unwrap();
+
+        assert_eq!(
+            collection
+                .append_segments(["/DMO/PROGRAM"])
+                .unwrap()
+                .as_str(),
+            "/sap/bc/adt/programs/programs/%2FDMO%2FPROGRAM"
+        );
     }
 }

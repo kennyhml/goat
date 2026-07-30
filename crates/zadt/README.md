@@ -138,7 +138,7 @@ execution capabilities:
 
 | Type | Represents | Created from |
 | --- | --- | --- |
-| `ObjectRef` | A type-erased repository-object identity and location, without implied capabilities | A validated `AdtUri`, a parsed URI, or an erased typed reference |
+| `ObjectRef` | A type-erased repository-object identity and location, without implied capabilities | An erased typed reference or a parsed ADT representation |
 | `ObjectRef<T>` | An object identity tagged with a static `ObjectType` marker | `Client<Discovered>::object::<T>(name)` |
 | `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable reference such as `ObjectRef<Program>` |
 | `ObjectRef<Program>` | A typed ABAP program reference | `Client<Discovered>::object::<Program>(name)` |
@@ -153,24 +153,6 @@ discovered client to construct typed references without type-specific methods:
 
 ```rust,ignore
 let program = client.object::<Program>("ZDEMO")?;
-```
-
-Constructing a reference performs no request. For a known object URI:
-
-```rust
-use zadt::ObjectRef;
-
-# fn example() -> Result<(), Box<dyn std::error::Error>> {
-let structure = ObjectRef::parse(
-    "/sap/bc/adt/ddic/structures/ZSTRUCTURE",
-)?;
-
-assert_eq!(
-    structure.uri().as_str(),
-    "/sap/bc/adt/ddic/structures/ZSTRUCTURE",
-);
-# Ok(())
-# }
 ```
 
 Domain references expose only the conventions established for that resource

@@ -5,7 +5,7 @@ use crate::{
     client::{Client, LoggedOnState},
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
-    objects::{ObjectRef, ObjectType, Source, append_segments},
+    objects::{ObjectRef, ObjectType, Source},
     operation::{Operation, Stateful, Stateless},
     protocol::{AdtRequest, AdtResponse},
     resource::SourceRef,
@@ -73,7 +73,9 @@ impl<T: ObjectType> ObjectRef<T> {
 impl<T: Source> ObjectRef<T> {
     /// Returns the objects conventional source resource.
     pub fn source(&self) -> SourceRef {
-        let uri = append_segments(self.uri(), T::PATH)
+        let uri = self
+            .uri()
+            .append_segments(T::PATH)
             .expect("static source path segments form a valid ADT URI");
         SourceRef::new(self.erase(), uri)
     }
