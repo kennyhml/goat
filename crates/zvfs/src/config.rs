@@ -1,93 +1,18 @@
 use zadt::{RepositoryFacet, RepositoryPreselection};
 
-/// One virtual-folder level in a mount's ordered facet policy.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FacetLevel {
-    /// Always retain this facet as a directory level.
-    Always { facet: RepositoryFacet },
-
-    /// Retain this facet only when the current selection contains enough objects.
-    Adaptive {
-        facet: RepositoryFacet,
-        minimum_objects: u32,
-    },
-}
-
-impl FacetLevel {
-    /// Creates a facet level that is always retained.
-    pub fn always(facet: impl Into<RepositoryFacet>) -> Self {
-        Self::Always {
-            facet: facet.into(),
-        }
-    }
-
-    /// Creates a facet level retained at or above `minimum_objects`.
-    pub fn adaptive(facet: impl Into<RepositoryFacet>, minimum_objects: u32) -> Self {
-        Self::Adaptive {
-            facet: facet.into(),
-            minimum_objects,
-        }
-    }
-
-    /// Returns the RIS facet represented by this level.
-    pub fn facet(&self) -> &RepositoryFacet {
-        match self {
-            Self::Always { facet } | Self::Adaptive { facet, .. } => facet,
-        }
-    }
-
-    /// Returns whether this level should be retained for an object count.
-    pub(crate) fn retains(&self, object_count: u32) -> bool {
-        match self {
-            Self::Always { .. } => true,
-            Self::Adaptive {
-                minimum_objects, ..
-            } => object_count >= *minimum_objects,
-        }
-    }
-}
-
-/// Controls the virtual folders inserted between one mount and its objects.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FacetPolicy {
-    levels: Vec<FacetLevel>,
-}
-
-impl FacetPolicy {
-    /// Creates an ordered policy from independently configured facet levels.
-    pub fn new(levels: impl IntoIterator<Item = FacetLevel>) -> Self {
-        Self {
-            levels: levels.into_iter().collect(),
-        }
-    }
-
-    /// Returns repository objects without virtual grouping folders.
-    pub fn flat() -> Self {
-        Self::new([])
-    }
-
-    /// Creates an always-grouped policy from an ordered facet chain.
-    pub fn grouped<I, F>(facets: I) -> Self
-    where
-        I: IntoIterator<Item = F>,
-        F: Into<RepositoryFacet>,
-    {
-        Self::new(facets.into_iter().map(FacetLevel::always))
-    }
-
-    /// Returns the ordered facet levels.
-    pub fn levels(&self) -> &[FacetLevel] {
-        &self.levels
-    }
-}
-
-impl Default for FacetPolicy {
-    fn default() -> Self {
-        Self::grouped([RepositoryFacet::GROUP, RepositoryFacet::TYPE])
-    }
-}
-
-/// A caller-defined root entry in a repository VFS.
+/// A caller-defined root entry in a virtual repository tree.
+///
+/// In Eclipse with ADT, that would be
+/// ```text
+/// A4H
+/// └── Local Objects ($TMP)
+/// └── Favorite Packages
+/// └── Favorite Objects
+/// └── System Libray
+///```
+/// They are static entry points into a vfs path with their own, customizable
+/// [`FacetPolicy`], which controls the presentation of the objects, and
+/// preselections, which control the displayed content.
 #[derive(Clone, Debug)]
 pub struct Mount {
     pub(crate) label: String,
@@ -139,7 +64,9 @@ impl Mount {
         }
     }
 
-    /// Sets the ordered virtual-folder policy for this mount.
+    /// Overrides this mount's repository-object grouping policy.
+    ///
+    /// Mounts use [`FacetPolicy::default`] unless overridden.
     pub fn facet_policy(mut self, facet_policy: FacetPolicy) -> Self {
         self.facet_policy = facet_policy;
         self
@@ -148,6 +75,155 @@ impl Mount {
     /// Returns the display label used for this mount.
     pub fn label(&self) -> &str {
         &self.label
+    }
+}
+/// Controls how matching repository objects are grouped into virtual folders.
+///
+/// RIS facets are metadata dimensions such as [`RepositoryFacet::OWNER`],
+/// [`RepositoryFacet::GROUP`], and [`RepositoryFacet::TYPE`]. A mounts
+/// preselections determine which objects match, its facet policy independently
+/// determines the ordered folder levels used to present those objects.
+///
+/// **Expanding a facet folder adds its value to the current preselections before
+/// the next policy level is evaluated.** A hierarchical facet can repeat at the
+/// same level until RIS reports that it has no more same-facet children. After
+/// the final configured level, the tree requests repository objects directly.
+///
+/// A [`FacetLevel::Always`] level is retained regardless of object count. An
+/// [`FacetLevel::Adaptive`] level is retained when RIS reports at least its
+/// configured minimum; otherwise only that level is skipped and evaluation
+/// continues with the next one. Adaptive decisions are reevaluated on refresh,
+/// so crossing a threshold can change the shape of that part of the tree.
+///
+/// Package hierarchy is handled separately from this policy. Package mounts
+/// retain their package nodes and apply the policy to objects assigned directly
+/// to each package.
+///
+/// The default policy groups by [`RepositoryFacet::GROUP`] and then
+/// [`RepositoryFacet::TYPE`]. Use [`FacetPolicy::flat`] to disable configurable
+/// facet-folder levels.
+///
+/// # Example
+///
+/// The following mount groups local objects by owner, broad repository group,
+/// and object type:
+///
+/// ```
+/// use zadt::{RepositoryFacet, RepositoryPreselection};
+/// use zvfs::{FacetLevel, FacetPolicy, Mount};
+///
+/// let mount = Mount::selection(
+///     "Local Objects ($TMP)",
+///     [RepositoryPreselection::direct_package("$TMP")],
+/// )
+/// .facet_policy(FacetPolicy::new([
+///     FacetLevel::always(RepositoryFacet::OWNER),
+///     FacetLevel::always(RepositoryFacet::GROUP),
+///     FacetLevel::always(RepositoryFacet::TYPE),
+/// ]));
+///
+/// assert_eq!(mount.label(), "Local Objects ($TMP)");
+/// ```
+///
+/// One resulting path can look like:
+///
+/// ```text
+/// Local Objects ($TMP)            <- Mount
+/// └── DEVELOPER                   <- OWNER facet
+///     └── Source Code Library     <- GROUP facet
+///         └── Classes             <- TYPE  facet
+///             └── ZCL_MY_CLASS
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FacetPolicy {
+    levels: Vec<FacetLevel>,
+}
+
+impl FacetPolicy {
+    /// Creates a policy whose levels are evaluated in iteration order.
+    pub fn new(levels: impl IntoIterator<Item = FacetLevel>) -> Self {
+        Self {
+            levels: levels.into_iter().collect(),
+        }
+    }
+
+    /// Returns objects without configurable facet-folder levels.
+    ///
+    /// Package hierarchy remains visible because it is independent of the
+    /// repository-object facet policy.
+    pub fn flat() -> Self {
+        Self::new([])
+    }
+
+    /// Creates an ordered policy in which every facet uses
+    /// [`FacetLevel::Always`].
+    pub fn grouped<I, F>(facets: I) -> Self
+    where
+        I: IntoIterator<Item = F>,
+        F: Into<RepositoryFacet>,
+    {
+        Self::new(facets.into_iter().map(FacetLevel::always))
+    }
+
+    /// Returns the facet levels in traversal order.
+    pub fn levels(&self) -> &[FacetLevel] {
+        &self.levels
+    }
+}
+
+impl Default for FacetPolicy {
+    /// Groups repository objects by broad group and then concrete object type.
+    fn default() -> Self {
+        Self::grouped([RepositoryFacet::GROUP, RepositoryFacet::TYPE])
+    }
+}
+
+/// One repository-object grouping level in a mount's ordered [`FacetPolicy`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FacetLevel {
+    /// Retain this facet as a virtual-folder level regardless of object count.
+    Always { facet: RepositoryFacet },
+
+    /// Retain this facet only when the current selection contains at least the
+    /// configured number of objects.
+    Adaptive {
+        facet: RepositoryFacet,
+        minimum_objects: u32,
+    },
+}
+
+impl FacetLevel {
+    /// Creates a grouping level that is retained regardless of object count.
+    pub fn always(facet: impl Into<RepositoryFacet>) -> Self {
+        Self::Always {
+            facet: facet.into(),
+        }
+    }
+
+    /// Creates a grouping level retained when the current object count is
+    /// greater than or equal to `minimum_objects`.
+    pub fn adaptive(facet: impl Into<RepositoryFacet>, minimum_objects: u32) -> Self {
+        Self::Adaptive {
+            facet: facet.into(),
+            minimum_objects,
+        }
+    }
+
+    /// Returns the RIS facet represented by this level.
+    pub fn facet(&self) -> &RepositoryFacet {
+        match self {
+            Self::Always { facet } | Self::Adaptive { facet, .. } => facet,
+        }
+    }
+
+    /// Returns whether this level should be retained for an object count.
+    pub(crate) fn retains(&self, object_count: u32) -> bool {
+        match self {
+            Self::Always { .. } => true,
+            Self::Adaptive {
+                minimum_objects, ..
+            } => object_count >= *minimum_objects,
+        }
     }
 }
 

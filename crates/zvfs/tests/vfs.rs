@@ -9,11 +9,12 @@ use std::{
 
 use async_trait::async_trait;
 use http::{HeaderMap, StatusCode};
+use tokio::sync::Notify;
 use zadt::{
     AdtRequest, AdtResponse, Client, RepositoryFacet, RepositoryPreselection, Transport,
     TransportError,
 };
-use zvfs::{FacetLevel, FacetPolicy, Mount, NodeId, NodeKind, VfsError, VirtualFileSystem};
+use zvfs::{FacetLevel, FacetPolicy, Mount, NodeId, NodeKind, VfsError, VirtualRepositoryTree};
 
 const DISCOVERY_XML: &str = include_str!("../../zadt/tests/fixtures/discovery.xml");
 
@@ -25,9 +26,9 @@ const EMPTY_XML: &str = r#"
 const CHILD_PACKAGES_XML: &str = r#"
     <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
         objectCount="7">
-        <vfs:virtualFolder name="/ROOT" displayName="Root Package" facet="PACKAGE"
+        <vfs:virtualFolder name="/ROOT" displayName="/ROOT" facet="PACKAGE"
             counter="7" hasChildrenOfSameFacet="true" />
-        <vfs:virtualFolder name="/ROOT/CHILD" displayName="Child Package" facet="PACKAGE"
+        <vfs:virtualFolder name="/ROOT/CHILD" displayName="/ROOT/CHILD" facet="PACKAGE"
             counter="7" hasChildrenOfSameFacet="false" />
     </vfs:virtualFoldersResult>
 "#;
@@ -76,6 +77,7 @@ enum Behavior {
     FailOnce,
     FailRefresh,
     Refresh,
+    AncestorRefreshRace,
 }
 
 #[derive(Clone)]
@@ -90,6 +92,8 @@ struct TransportState {
     post_count: AtomicUsize,
     active: AtomicUsize,
     max_active: AtomicUsize,
+    descendant_started: Notify,
+    release_descendant: Notify,
 }
 
 impl TestTransport {
@@ -245,6 +249,17 @@ impl TestTransport {
                     </vfs:virtualFoldersResult>"#
                 ))
             }
+            Behavior::AncestorRefreshRace => {
+                if body.contains("<vfs:facet>GROUP</vfs:facet>") {
+                    Ok(GROUP_XML.to_owned())
+                } else if body.contains("<vfs:value>SOURCE_LIBRARY</vfs:value>") {
+                    Ok(OBJECT_XML.to_owned())
+                } else {
+                    Err(io::Error::other(format!(
+                        "unexpected ancestor-refresh race request body: {body}"
+                    )))
+                }
+            }
         }
     }
 }
@@ -265,6 +280,14 @@ impl Transport for TestTransport {
             self.state.max_active.fetch_max(active, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_millis(40)).await;
             self.state.active.fetch_sub(1, Ordering::SeqCst);
+        }
+
+        if matches!(self.behavior, Behavior::AncestorRefreshRace)
+            && body.contains("<vfs:value>SOURCE_LIBRARY</vfs:value>")
+            && !body.contains("<vfs:facet>")
+        {
+            self.state.descendant_started.notify_one();
+            self.state.release_descendant.notified().await;
         }
 
         let response = self
@@ -344,10 +367,17 @@ fn assert_output_facet(body: &str, facet: Option<&str>) {
     }
 }
 
+fn successor(id: NodeId) -> NodeId {
+    let mut value = serde_json::to_value(id).unwrap();
+    let index = value["index"].as_u64().unwrap();
+    value["index"] = serde_json::Value::from(index.checked_add(1).unwrap());
+    serde_json::from_value(value).unwrap()
+}
+
 #[tokio::test]
 async fn traverses_packages_groups_types_and_objects() {
     let (client, state) = client(Behavior::Tree).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(Mount::package("/ROOT"))
         .build();
 
@@ -361,7 +391,7 @@ async fn traverses_packages_groups_types_and_objects() {
             .iter()
             .map(|node| node.label.as_str())
             .collect::<Vec<_>>(),
-        ["Child Package", "Source Code Library"]
+        ["/ROOT/CHILD", "Source Code Library"]
     );
 
     let group = package_children
@@ -400,7 +430,7 @@ async fn traverses_packages_groups_types_and_objects() {
 
     assert_eq!(
         vfs.render_tree(),
-        "/\n└── /ROOT\n    ├── Child Package\n    └── Source Code Library\n        └── Classes\n            └── ZCL_DEMO"
+        "/\n└── /ROOT\n    ├── /ROOT/CHILD\n    └── Source Code Library\n        └── Classes\n            └── ZCL_DEMO"
     );
 
     let requests = state.requests.lock().unwrap();
@@ -414,14 +444,14 @@ async fn traverses_packages_groups_types_and_objects() {
 #[tokio::test]
 async fn child_packages_inherit_their_mounts_facet_policy() {
     let (client, state) = client(Behavior::Tree).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(Mount::package("/ROOT").facet_policy(FacetPolicy::grouped([RepositoryFacet::OWNER])))
         .build();
     let package = vfs.children(vfs.root()).await.unwrap().remove(0);
     let children = vfs.children(package.id).await.unwrap();
     let child_package = children
         .iter()
-        .find(|node| node.label == "Child Package")
+        .find(|node| node.label == "/ROOT/CHILD")
         .unwrap();
 
     let child_contents = vfs.children(child_package.id).await.unwrap();
@@ -450,7 +480,7 @@ async fn child_packages_inherit_their_mounts_facet_policy() {
 async fn adaptive_type_facets_skip_small_layers_and_keep_large_layers() {
     for (count, expected_label, expected_requests) in [(3, "ZCL_DEMO", 3), (10, "Classes", 2)] {
         let (client, state) = client(Behavior::Adaptive(count)).await;
-        let vfs = VirtualFileSystem::builder(client)
+        let vfs = VirtualRepositoryTree::builder(client)
             .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
                 FacetLevel::always(RepositoryFacet::GROUP),
                 FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
@@ -472,7 +502,7 @@ async fn adaptive_facets_skip_only_their_own_level() {
         [(3, "Classes", 2), (10, "Source Code Library", 1)]
     {
         let (client, state) = client(Behavior::Adaptive(count)).await;
-        let vfs = VirtualFileSystem::builder(client)
+        let vfs = VirtualRepositoryTree::builder(client)
             .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
                 FacetLevel::adaptive(RepositoryFacet::GROUP, 10),
                 FacetLevel::always(RepositoryFacet::TYPE),
@@ -506,7 +536,7 @@ async fn applies_facet_policies_independently_per_mount() {
         )],
     )
     .facet_policy(FacetPolicy::grouped([RepositoryFacet::TYPE]));
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(group_mount)
         .mount(type_mount)
         .build();
@@ -542,7 +572,7 @@ async fn carries_mount_and_selected_facet_filters_through_every_expansion() {
         RepositoryFacet::GROUP,
         RepositoryFacet::TYPE,
     ]));
-    let vfs = VirtualFileSystem::builder(client).mount(mount).build();
+    let vfs = VirtualRepositoryTree::builder(client).mount(mount).build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
     let owner = vfs.children(mount.id).await.unwrap().remove(0);
@@ -574,7 +604,7 @@ async fn carries_mount_and_selected_facet_filters_through_every_expansion() {
 #[tokio::test]
 async fn repeats_hierarchical_facets_before_advancing() {
     let (client, state) = client(Behavior::Hierarchical).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(
             selection_mount("Objects").facet_policy(FacetPolicy::grouped([
                 RepositoryFacet::APPLICATION_COMPONENT,
@@ -622,7 +652,7 @@ async fn repeats_hierarchical_facets_before_advancing() {
 #[tokio::test]
 async fn adaptive_refresh_rechecks_the_current_object_count() {
     let (client, state) = client(Behavior::AdaptiveRefresh).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
             FacetLevel::always(RepositoryFacet::GROUP),
             FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
@@ -659,7 +689,7 @@ async fn adaptive_refresh_rechecks_the_current_object_count() {
 #[tokio::test]
 async fn adaptive_refresh_can_skip_a_repeated_same_facet_level() {
     let (client, state) = client(Behavior::AdaptiveHierarchyRefresh).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
             FacetLevel::adaptive(RepositoryFacet::APPLICATION_COMPONENT, 10),
             FacetLevel::always(RepositoryFacet::TYPE),
@@ -698,7 +728,7 @@ async fn adaptive_refresh_can_skip_a_repeated_same_facet_level() {
 #[tokio::test]
 async fn scopes_loading_locks_to_individual_nodes() {
     let (client, state) = client(Behavior::SlowEmpty).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("First"))
         .mount(flat_selection_mount("Second"))
         .build();
@@ -715,7 +745,7 @@ async fn scopes_loading_locks_to_individual_nodes() {
 #[tokio::test]
 async fn deduplicates_concurrent_loads_of_the_same_node() {
     let (client, state) = client(Behavior::SlowEmpty).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("Objects"))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
@@ -729,9 +759,41 @@ async fn deduplicates_concurrent_loads_of_the_same_node() {
 }
 
 #[tokio::test]
+async fn ancestor_refresh_does_not_leave_orphans_from_a_descendant_load() {
+    let (client, state) = client(Behavior::AncestorRefreshRace).await;
+    let vfs = VirtualRepositoryTree::builder(client)
+        .mount(
+            selection_mount("Objects").facet_policy(FacetPolicy::grouped([RepositoryFacet::GROUP])),
+        )
+        .build();
+    let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+    let descendant = vfs.children(mount.id).await.unwrap().remove(0);
+
+    let descendant_load = vfs.children(descendant.id);
+    let ancestor_refresh = async {
+        state.descendant_started.notified().await;
+        let refreshed = vfs.refresh(mount.id).await;
+        state.release_descendant.notify_one();
+        refreshed
+    };
+
+    let (descendant_result, refreshed) = tokio::join!(descendant_load, ancestor_refresh);
+    let replacement = refreshed.unwrap().remove(0);
+
+    assert!(matches!(
+        descendant_result,
+        Err(VfsError::StaleNode(id)) if id == descendant.id
+    ));
+    assert!(
+        vfs.node(successor(replacement.id)).is_none(),
+        "a stale descendant load inserted an orphan node"
+    );
+}
+
+#[tokio::test]
 async fn retries_failed_expansions_instead_of_caching_the_error() {
     let (client, state) = client(Behavior::FailOnce).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("Objects"))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
@@ -744,7 +806,7 @@ async fn retries_failed_expansions_instead_of_caching_the_error() {
 #[tokio::test]
 async fn refresh_replaces_descendants_and_invalidates_old_ids() {
     let (client, _) = client(Behavior::Refresh).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("Objects"))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
@@ -764,7 +826,7 @@ async fn refresh_replaces_descendants_and_invalidates_old_ids() {
 #[tokio::test]
 async fn failed_refresh_preserves_the_cached_subtree() {
     let (client, _) = client(Behavior::FailRefresh).await;
-    let vfs = VirtualFileSystem::builder(client)
+    let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("Objects"))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
@@ -781,8 +843,8 @@ async fn failed_refresh_preserves_the_cached_subtree() {
 async fn rejects_node_ids_from_another_vfs_instance() {
     let (first_client, _) = client(Behavior::SlowEmpty).await;
     let (second_client, _) = client(Behavior::SlowEmpty).await;
-    let first = VirtualFileSystem::builder(first_client).build();
-    let second = VirtualFileSystem::builder(second_client).build();
+    let first = VirtualRepositoryTree::builder(first_client).build();
+    let second = VirtualRepositoryTree::builder(second_client).build();
 
     assert_ne!(first.root(), second.root());
     assert!(first.node(second.root()).is_none());

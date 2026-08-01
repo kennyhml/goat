@@ -69,6 +69,16 @@ pub enum NodeKind {
         object: ObjectNode,
     },
 }
+impl NodeKind {
+    pub(crate) fn rank(&self) -> u8 {
+        match self {
+            NodeKind::Root | NodeKind::Mount { .. } => 0,
+            NodeKind::Package { .. } => 1,
+            NodeKind::Facet { .. } => 2,
+            NodeKind::Object { .. } => 3,
+        }
+    }
+}
 
 /// The behavior represented by a non-package mount node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

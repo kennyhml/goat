@@ -13,8 +13,7 @@
 //! and write access. During expansion (which inevitably invokes an I/O request),
 //! a node-local mutex ensures data consistency on concurrent read requests without
 //! keeping the rest of the graph locked.
-
-use std::{collections::HashMap, sync::Arc};
+use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 use async_lock::Mutex;
 use futures_util::future::try_join;
@@ -23,6 +22,7 @@ use uuid::Uuid;
 use zadt::{
     Client, Operation, Ready, RepositoryContent, RepositoryContentOperation,
     RepositoryContentQuery, RepositoryFacet, RepositoryObjectEntry, RepositoryPreselection,
+    RepositoryVirtualFolder,
 };
 
 use crate::{
@@ -35,7 +35,7 @@ use crate::{
 /// Much like the ADT client it holds, it is safe to hold
 /// references to this VFS in various places.
 #[derive(Clone)]
-pub struct VirtualFileSystem {
+pub struct VirtualRepositoryTree {
     inner: Arc<Inner>,
 }
 
@@ -45,7 +45,7 @@ struct Inner {
     graph: RwLock<Graph>,
 }
 
-/// Mutable node storage for one VFS instance.
+/// Mutable node storage for one virtual repository tree.
 ///
 /// Access must be synchronized because lazy expansion and refresh mutate the
 /// graph through shared handles.
@@ -71,17 +71,39 @@ impl Graph {
         }
     }
 
+    /// Resolves a scoped node ID to its live internal index.
+    ///
+    /// IDs from another tree and IDs whose records have been removed are both
+    /// rejected.
     fn index(&self, id: NodeId) -> Option<u64> {
         id.index_for(self.scope)
             .filter(|index| self.nodes.contains_key(index))
     }
 
-    fn insert(&mut self, parent: Option<NodeId>, spec: NodeSpec) -> NodeId {
+    /// Returns the live record for a node ID belonging to this tree.
+    fn record(&self, id: NodeId) -> Option<&NodeRecord> {
+        let index = id.index_for(self.scope)?;
+        self.nodes.get(&index)
+    }
+
+    /// Returns the live record mutably for a node ID belonging to this tree.
+    fn mut_record(&mut self, id: NodeId) -> Option<&mut NodeRecord> {
+        let index = id.index_for(self.scope)?;
+        self.nodes.get_mut(&index)
+    }
+
+    /// Inserts one prepared node and assigns it the next scoped identity.
+    ///
+    /// Indices are consumed monotonically and remain reserved after removal.
+    /// This method does not validate `parent`. Callers inserting children from
+    /// asynchronously loaded data must use [`Graph::try_insert_children`].
+    fn insert(&mut self, parent: Option<NodeId>, node: PreparedNode) -> NodeId {
         let index = self.next_index;
         self.next_index = self
             .next_index
             .checked_add(1)
             .expect("a VFS cannot exhaust all u64 node identities");
+
         let id = NodeId::new(self.scope, index);
         self.nodes.insert(
             index,
@@ -89,14 +111,72 @@ impl Graph {
                 Node {
                     id,
                     parent,
-                    label: spec.label,
-                    kind: spec.kind,
+                    label: node.label,
+                    kind: node.kind,
                 },
-                spec.expansion,
-                spec.object,
+                node.expansion,
+                node.object,
             ),
         );
         id
+    }
+
+    /// Inserts prepared children if `parent` is still present in this graph.
+    ///
+    /// Parent validation happens before any identities are allocated. This
+    /// prevents an ancestor refresh that completed while backend work was in
+    /// flight from leaving newly inserted children without a live parent.
+    ///
+    /// Returns the childrens internal indices in iteration order, or `None`
+    /// without inserting anything when the parent is absent.
+    fn try_insert_children(
+        &mut self,
+        parent: NodeId,
+        children: impl IntoIterator<Item = PreparedNode>,
+    ) -> Option<Vec<u64>> {
+        self.record(parent)?;
+
+        Some(
+            children
+                .into_iter()
+                .map(|node| {
+                    self.insert(Some(parent), node)
+                        .index_for(self.scope)
+                        .expect("a newly inserted node belongs to its graph")
+                })
+                .collect(),
+        )
+    }
+
+    /// Returns owned snapshots for the given internal node indices.
+    ///
+    /// Nodes are cloned so the returned values do not borrow the graph or extend
+    /// the lifetime of its lock guard. Input order is preserved, and later graph
+    /// updates do not affect the snapshots.
+    fn node_snapshots(&self, ids: &[u64]) -> Result<Vec<Node>, VfsError> {
+        ids.iter()
+            .map(|id| {
+                self.nodes
+                    .get(id)
+                    .map(|record| record.node.clone())
+                    .ok_or(VfsError::UnknownNode(NodeId::new(self.scope, *id)))
+            })
+            .collect()
+    }
+
+    /// Removes each supplied root and all of its materialized descendants.
+    ///
+    /// Missing roots are ignored. Removed indices remain reserved and are not
+    /// assigned to future nodes.
+    fn remove_subtrees(&mut self, roots: Vec<u64>) {
+        let mut pending = roots;
+        while let Some(id) = pending.pop() {
+            if let Some(record) = self.nodes.remove(&id)
+                && let Some(children) = record.children
+            {
+                pending.extend(children);
+            }
+        }
     }
 }
 
@@ -120,6 +200,41 @@ impl NodeRecord {
             object,
             children: None,
             load: Arc::new(Mutex::new(())),
+        }
+    }
+
+    /// Applies newly loaded facet metadata to both the public node representation
+    /// and its internal expansion state. `None` leaves the existing value unchanged.
+    fn update_facet_state(
+        &mut self,
+        object_count: Option<u32>,
+        has_children_of_same_facet: Option<bool>,
+    ) {
+        if let NodeKind::Facet {
+            object_count: count,
+            has_children_of_same_facet: has_children,
+            ..
+        } = &mut self.node.kind
+        {
+            if let Some(object_count) = object_count {
+                *count = object_count;
+            }
+            if let Some(has_children_of_same_facet) = has_children_of_same_facet {
+                *has_children = has_children_of_same_facet;
+            }
+        }
+        if let Expansion::Facet {
+            object_count: count,
+            has_children_of_same_facet: has_children,
+            ..
+        } = &mut self.expansion
+        {
+            if let Some(object_count) = object_count {
+                *count = object_count;
+            }
+            if let Some(has_children_of_same_facet) = has_children_of_same_facet {
+                *has_children = has_children_of_same_facet;
+            }
         }
     }
 }
@@ -158,10 +273,14 @@ impl ExpansionContext {
 
     fn with_preselection(&self, preselection: RepositoryPreselection) -> Self {
         let mut context = self.clone();
+        // RIS intersects repeated same-facet entries, while retaining them also
+        // preserves the complete path through hierarchical facets.
         context.preselections.push(preselection);
         context
     }
 
+    /// Creates a new [`Expansion`] for this context where the given package
+    /// is used to expand upon. The expansion policy is shared.
     fn child_package(&self, package: String) -> Expansion {
         Expansion::Package {
             package,
@@ -169,6 +288,30 @@ impl ExpansionContext {
         }
     }
 
+    /// Creates a new [`Expansion`] whose context includes the selected facet value.
+    ///
+    /// For example, selecting a group folder while browsing a package produces
+    /// the following transition:
+    ///
+    /// ```text
+    /// Parent query:
+    ///   preselections: [PACKAGE=../ROOT]
+    ///   output facet:  GROUP (index 0)
+    ///
+    /// Selected folder:
+    ///   GROUP=SOURCE_LIBRARY
+    ///
+    /// Child expansion:
+    ///   preselections: [PACKAGE=../ROOT, GROUP=SOURCE_LIBRARY]
+    ///   facet index:   0
+    ///
+    /// Expanding that child:
+    ///   same-facet children: GROUP (index 0)
+    ///   otherwise:           TYPE  (index 1)
+    /// ```
+    ///
+    /// This method stores the index of the facet that produced the child. The
+    /// expansion logic later decides whether to repeat or advance that index.
     fn child_facet(
         &self,
         preselection: RepositoryPreselection,
@@ -211,31 +354,205 @@ enum Expansion {
 }
 
 /// A node prepared off-graph and assigned an identity when committed.
-struct NodeSpec {
+struct PreparedNode {
     label: String,
     kind: NodeKind,
     expansion: Expansion,
     object: Option<RepositoryObjectEntry>,
 }
 
+impl PreparedNode {
+    fn from_package_folder(folder: RepositoryVirtualFolder, context: &ExpansionContext) -> Self {
+        Self {
+            label: folder.name.clone(),
+            kind: NodeKind::Package {
+                package: folder.name.clone(),
+                object_count: Some(folder.object_count),
+            },
+            expansion: context.child_package(folder.name),
+            object: None,
+        }
+    }
+
+    fn tree_order(&self, other: &Self) -> Ordering {
+        self.kind_order(&other)
+            .then_with(|| self.label_order(&other))
+    }
+
+    fn kind_order(&self, other: &Self) -> Ordering {
+        self.kind.rank().cmp(&other.kind.rank())
+    }
+
+    fn label_order(&self, other: &Self) -> Ordering {
+        let left = self.label.to_ascii_lowercase();
+        let right = other.label.to_ascii_lowercase();
+
+        left.cmp(&right).then_with(|| self.label.cmp(&other.label))
+    }
+}
+
+impl From<Mount> for PreparedNode {
+    fn from(mount: Mount) -> Self {
+        let Mount {
+            label,
+            target,
+            facet_policy,
+        } = mount;
+        match target {
+            MountTarget::SystemLibrary => PreparedNode {
+                label,
+                kind: NodeKind::Mount {
+                    mount: MountKind::SystemLibrary,
+                },
+                // Load all packages
+                expansion: Expansion::PackageIndex {
+                    context: ExpansionContext::new(facet_policy, Vec::new()),
+                },
+                object: None,
+            },
+            MountTarget::Package(package) => PreparedNode {
+                label,
+                kind: NodeKind::Package {
+                    package: package.clone(),
+                    object_count: None,
+                },
+                // Load sub packages
+                expansion: Expansion::Package {
+                    package,
+                    context: ExpansionContext::new(facet_policy, Vec::new()),
+                },
+                object: None,
+            },
+            MountTarget::Selection(preselections) => PreparedNode {
+                label,
+                kind: NodeKind::Mount {
+                    mount: MountKind::Selection,
+                },
+                // Load custom preselection
+                expansion: Expansion::Selection {
+                    context: ExpansionContext::new(facet_policy, preselections),
+                },
+                object: None,
+            },
+        }
+    }
+}
+
+impl From<RepositoryObjectEntry> for PreparedNode {
+    fn from(entry: RepositoryObjectEntry) -> Self {
+        let object = ObjectNode {
+            name: entry.name.clone(),
+            package: entry.package.clone(),
+            object_type: entry.object_type.to_string(),
+            uri: entry.reference.uri().to_string(),
+            virtual_workbench_uri: entry.virtual_workbench_uri.clone(),
+            version: entry.version.clone(),
+            expandable: entry.expandable,
+            description: entry.description.clone(),
+        };
+        PreparedNode {
+            label: entry.name.clone(),
+            kind: NodeKind::Object { object },
+            expansion: Expansion::Leaf,
+            object: Some(entry),
+        }
+    }
+}
+
 struct Loaded {
-    specs: Vec<NodeSpec>,
+    prepared: Vec<PreparedNode>,
     object_count: Option<u32>,
     has_children_of_same_facet: Option<bool>,
 }
 
 struct LoadedLayer {
-    specs: Vec<NodeSpec>,
+    nodes: Vec<PreparedNode>,
     object_count: u32,
 }
 
-/// Configures and creates a [`VirtualFileSystem`].
-pub struct VirtualFileSystemBuilder {
+impl LoadedLayer {
+    fn from_packages(content: RepositoryContent, context: ExpansionContext) -> Self {
+        let object_count = content.object_count;
+        let mut nodes = content
+            .folders
+            .into_iter()
+            .filter(|folder| {
+                folder.facet == RepositoryFacet::PACKAGE && !folder.is_direct_assignment()
+            })
+            .map(|folder| PreparedNode::from_package_folder(folder, &context))
+            .collect::<Vec<_>>();
+        nodes.sort_by(PreparedNode::tree_order);
+
+        Self {
+            nodes,
+            object_count,
+        }
+    }
+
+    fn from_folders(
+        content: RepositoryContent,
+        context: ExpansionContext,
+        facet_index: usize,
+    ) -> Self {
+        let object_count = content.object_count;
+        let mut nodes = content
+            .folders
+            .into_iter()
+            .map(|folder| {
+                let expansion = context.child_facet(
+                    folder.preselection(),
+                    facet_index,
+                    folder.object_count,
+                    folder.has_children_of_same_facet,
+                );
+                PreparedNode {
+                    label: if folder.display_name.is_empty() {
+                        folder.name.clone()
+                    } else {
+                        folder.display_name
+                    },
+                    kind: NodeKind::Facet {
+                        facet: folder.facet.to_string(),
+                        value: folder.name,
+                        object_count: folder.object_count,
+                        has_children_of_same_facet: folder.has_children_of_same_facet,
+                    },
+                    expansion,
+                    object: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        nodes.sort_by(PreparedNode::tree_order);
+
+        Self {
+            nodes,
+            object_count,
+        }
+    }
+
+    fn from_objects(content: RepositoryContent) -> Self {
+        let object_count = content.object_count;
+        let mut nodes = content
+            .objects
+            .into_iter()
+            .map(From::from)
+            .collect::<Vec<_>>();
+        nodes.sort_by(PreparedNode::tree_order);
+
+        Self {
+            nodes,
+            object_count,
+        }
+    }
+}
+
+/// Configures and creates a [`VirtualRepositoryTree`].
+pub struct VirtualRepositoryTreeBuilder {
     client: Client<Ready>,
     mounts: Vec<Mount>,
 }
 
-impl VirtualFileSystemBuilder {
+impl VirtualRepositoryTreeBuilder {
     fn new(client: Client<Ready>) -> Self {
         Self {
             client,
@@ -256,22 +573,22 @@ impl VirtualFileSystemBuilder {
     }
 
     /// Builds an in-memory tree without making an ADT request.
-    pub fn build(self) -> VirtualFileSystem {
-        VirtualFileSystem::from_builder(self)
+    pub fn build(self) -> VirtualRepositoryTree {
+        VirtualRepositoryTree::from_builder(self)
     }
 }
 
-impl VirtualFileSystem {
-    /// Starts configuring a VFS backed by an already discovered ADT client.
-    pub fn builder(client: Client<Ready>) -> VirtualFileSystemBuilder {
-        VirtualFileSystemBuilder::new(client)
+impl VirtualRepositoryTree {
+    /// Starts configuring a repository tree backed by an already discovered ADT client.
+    pub fn builder(client: Client<Ready>) -> VirtualRepositoryTreeBuilder {
+        VirtualRepositoryTreeBuilder::new(client)
     }
 
-    fn from_builder(builder: VirtualFileSystemBuilder) -> Self {
+    fn from_builder(builder: VirtualRepositoryTreeBuilder) -> Self {
         let mut graph = Graph::new();
         let root = graph.insert(
             None,
-            NodeSpec {
+            PreparedNode {
                 label: "/".to_owned(),
                 kind: NodeKind::Root,
                 expansion: Expansion::Static,
@@ -282,7 +599,8 @@ impl VirtualFileSystem {
         let mut children = Vec::with_capacity(builder.mounts.len());
         for mount in builder.mounts {
             children.push(
-                insert_spec(&mut graph, root, mount_spec(mount))
+                graph
+                    .insert(Some(root), mount.into())
                     .index_for(graph.scope)
                     .expect("a newly inserted node belongs to its graph"),
             );
@@ -342,20 +660,18 @@ impl VirtualFileSystem {
     /// Returns the retained ADT entry for an object node.
     pub fn object_entry(&self, id: NodeId) -> Result<RepositoryObjectEntry, VfsError> {
         let graph = self.inner.graph.read();
-        let index = graph.index(id).ok_or(VfsError::UnknownNode(id))?;
-        let record = graph.nodes.get(&index).ok_or(VfsError::UnknownNode(id))?;
+        let record = graph.record(id).ok_or(VfsError::UnknownNode(id))?;
         record.object.clone().ok_or(VfsError::NotObject(id))
     }
 
     /// Returns loaded children without starting an ADT request.
     pub fn cached_children(&self, id: NodeId) -> Result<Option<Vec<Node>>, VfsError> {
         let graph = self.inner.graph.read();
-        let index = graph.index(id).ok_or(VfsError::UnknownNode(id))?;
-        let record = graph.nodes.get(&index).ok_or(VfsError::UnknownNode(id))?;
+        let record = graph.record(id).ok_or(VfsError::UnknownNode(id))?;
         record
             .children
             .as_deref()
-            .map(|children| snapshots(&graph, children))
+            .map(|children| graph.node_snapshots(children))
             .transpose()
     }
 
@@ -414,26 +730,24 @@ impl VirtualFileSystem {
     pub async fn children(&self, id: NodeId) -> Result<Vec<Node>, VfsError> {
         let load = {
             let graph = self.inner.graph.read();
-            let index = graph.index(id).ok_or(VfsError::UnknownNode(id))?;
-            let record = graph.nodes.get(&index).ok_or(VfsError::UnknownNode(id))?;
+            let record = graph.record(id).ok_or(VfsError::UnknownNode(id))?;
             if let Some(children) = &record.children {
-                return snapshots(&graph, children);
+                return graph.node_snapshots(children);
             }
             if matches!(record.expansion, Expansion::Leaf) {
                 return Err(VfsError::NotDirectory(id));
             }
             record.load.clone()
         };
-
         let _load_guard = load.lock().await;
-        let expansion = {
-            let graph = self.inner.graph.read();
-            let index = graph.index(id).ok_or(VfsError::UnknownNode(id))?;
-            let record = graph.nodes.get(&index).ok_or(VfsError::UnknownNode(id))?;
 
-            // Second check after lock is relased!!!
+        let expansion = {
+            // Another task may have populated the cache while we waited for this
+            // nodes load lock, so check again before issuing a backend request.
+            let graph = self.inner.graph.read();
+            let record = graph.record(id).ok_or(VfsError::StaleNode(id))?;
             if let Some(children) = &record.children {
-                return snapshots(&graph, children);
+                return graph.node_snapshots(children);
             }
             record.expansion.clone()
         };
@@ -442,73 +756,72 @@ impl VirtualFileSystem {
             return Err(VfsError::NotRefreshable(id));
         }
 
+        // Insert the children into the tree first so that we can get
+        // references to have the parent node point to
         let loaded = self.load(expansion, false).await?;
         let mut graph = self.inner.graph.write();
-        let index = graph.index(id).ok_or(VfsError::StaleNode(id))?;
-        let children = insert_specs(&mut graph, id, loaded.specs);
-        let record = graph.nodes.get_mut(&index).ok_or(VfsError::StaleNode(id))?;
-        update_facet_state(
-            record,
-            loaded.object_count,
-            loaded.has_children_of_same_facet,
-        );
+        let children = graph
+            .try_insert_children(id, loaded.prepared)
+            .ok_or(VfsError::StaleNode(id))?;
+
+        // Update the parent with the references and the possibly new
+        // repository metadata to keep it synced
+        let record = graph.mut_record(id).ok_or(VfsError::StaleNode(id))?;
+        record.update_facet_state(loaded.object_count, loaded.has_children_of_same_facet);
         record.children = Some(children.clone());
-        snapshots(&graph, &children)
+        graph.node_snapshots(&children)
     }
 
     /// Reloads one directory and atomically replaces its cached descendants.
     ///
     /// Existing children remain visible while the ADT request is in flight. On
     /// success, their IDs become stale and newly loaded children replace them.
+    ///
+    /// A concurrent task could simultaneously erase this node from the vfs, for
+    /// example when an ancestor is refreshed. In that case, this node becomes stale
+    /// and the result is discarded with an error.
     pub async fn refresh(&self, id: NodeId) -> Result<Vec<Node>, VfsError> {
         let load = {
             let graph = self.inner.graph.read();
-            let index = graph.index(id).ok_or(VfsError::UnknownNode(id))?;
-            let record = graph.nodes.get(&index).ok_or(VfsError::UnknownNode(id))?;
+            let record = graph.record(id).ok_or(VfsError::UnknownNode(id))?;
             match record.expansion {
                 Expansion::Static => return Err(VfsError::NotRefreshable(id)),
                 Expansion::Leaf => return Err(VfsError::NotDirectory(id)),
                 _ => record.load.clone(),
             }
         };
-
         let _load_guard = load.lock().await;
 
         let expansion = {
             let graph = self.inner.graph.read();
-            let index = graph.index(id).ok_or(VfsError::StaleNode(id))?;
-            graph
-                .nodes
-                .get(&index)
-                .ok_or(VfsError::StaleNode(id))?
-                .expansion
-                .clone()
+            let record = graph.record(id).ok_or(VfsError::StaleNode(id))?;
+            record.expansion.clone()
         };
         let loaded = self.load(expansion, true).await?;
-
         let mut graph = self.inner.graph.write();
-        let index = graph.index(id).ok_or(VfsError::StaleNode(id))?;
-        let old_children = graph
-            .nodes
-            .get(&index)
+
+        // Remove the current children recursively, they are now stale
+        // TODO: Implement reconciliation instead of busting it all?
+        if let Some(children) = graph
+            .mut_record(id)
             .ok_or(VfsError::StaleNode(id))?
             .children
-            .clone()
-            .unwrap_or_default();
-        remove_subtrees(&mut graph, old_children);
+            .take()
+        {
+            graph.remove_subtrees(children);
+        }
 
-        let children = insert_specs(&mut graph, id, loaded.specs);
-        let record = graph.nodes.get_mut(&index).ok_or(VfsError::StaleNode(id))?;
-        update_facet_state(
-            record,
-            loaded.object_count,
-            loaded.has_children_of_same_facet,
-        );
+        let children = graph
+            .try_insert_children(id, loaded.prepared)
+            .ok_or(VfsError::StaleNode(id))?;
+
+        let record = graph.mut_record(id).ok_or(VfsError::StaleNode(id))?;
+        record.update_facet_state(loaded.object_count, loaded.has_children_of_same_facet);
         record.children = Some(children.clone());
-        snapshots(&graph, &children)
+        graph.node_snapshots(&children)
     }
 
-    /// Executes an expansion recipe and returns children not yet inserted into the graph.
+    /// Executes an expansion strategy and returns children not yet inserted into the graph.
     async fn load(&self, expansion: Expansion, refresh: bool) -> Result<Loaded, VfsError> {
         match expansion {
             Expansion::Static => unreachable!("static nodes have preloaded children"),
@@ -517,20 +830,20 @@ impl VirtualFileSystem {
                     .query_content(context.preselections(), Some(RepositoryFacet::PACKAGE))
                     .await?;
                 Ok(Loaded {
-                    specs: package_specs(content, context),
+                    prepared: LoadedLayer::from_packages(content, context).nodes,
                     object_count: None,
                     has_children_of_same_facet: None,
                 })
             }
             Expansion::Package { package, context } => Ok(Loaded {
-                specs: self.load_package(package, context).await?,
+                prepared: self.load_package(package, context).await?,
                 object_count: None,
                 has_children_of_same_facet: None,
             }),
             Expansion::Selection { context } => {
                 let layer = self.load_object_layer(context, 0).await?;
                 Ok(Loaded {
-                    specs: layer.specs,
+                    prepared: layer.nodes,
                     object_count: None,
                     has_children_of_same_facet: None,
                 })
@@ -551,7 +864,7 @@ impl VirtualFileSystem {
                 };
                 let layer = self.load_object_layer(context, next_facet).await?;
                 Ok(Loaded {
-                    specs: layer.specs,
+                    prepared: layer.nodes,
                     object_count: Some(layer.object_count),
                     has_children_of_same_facet: None,
                 })
@@ -569,7 +882,7 @@ impl VirtualFileSystem {
         let Some(level) = context.facet_policy().levels().get(facet_index).cloned() else {
             let layer = self.load_object_layer(context, facet_index + 1).await?;
             return Ok(Loaded {
-                specs: layer.specs,
+                prepared: layer.nodes,
                 object_count: Some(layer.object_count),
                 has_children_of_same_facet: None,
             });
@@ -587,14 +900,14 @@ impl VirtualFileSystem {
         if !same_facet.folders.is_empty() {
             let object_count = same_facet.object_count;
             let specs = if level.retains(object_count) {
-                self.content_specs(same_facet, context, Some(facet_index))
+                LoadedLayer::from_folders(same_facet, context, facet_index).nodes
             } else {
                 self.load_object_layer(context, facet_index + 1)
                     .await?
-                    .specs
+                    .nodes
             };
             return Ok(Loaded {
-                specs,
+                prepared: specs,
                 object_count: Some(object_count),
                 has_children_of_same_facet: Some(true),
             });
@@ -602,7 +915,7 @@ impl VirtualFileSystem {
 
         let layer = self.load_object_layer(context, facet_index + 1).await?;
         Ok(Loaded {
-            specs: layer.specs,
+            prepared: layer.nodes,
             object_count: Some(layer.object_count),
             has_children_of_same_facet: Some(false),
         })
@@ -613,7 +926,7 @@ impl VirtualFileSystem {
         &self,
         package: String,
         context: ExpansionContext,
-    ) -> Result<Vec<NodeSpec>, VfsError> {
+    ) -> Result<Vec<PreparedNode>, VfsError> {
         let mut child_selection = context.preselections().to_vec();
         child_selection.push(RepositoryPreselection::new(
             RepositoryFacet::PACKAGE,
@@ -630,10 +943,10 @@ impl VirtualFileSystem {
             .folders
             .retain(|folder| folder.facet != RepositoryFacet::PACKAGE || folder.name != package);
 
-        let mut specs = package_specs(child_packages, context);
-        specs.extend(direct_objects.specs);
-        sort_specs(&mut specs);
-        Ok(specs)
+        let mut nodes = LoadedLayer::from_packages(child_packages, context).nodes;
+        nodes.extend(direct_objects.nodes);
+        nodes.sort_by(PreparedNode::tree_order);
+        Ok(nodes)
     }
 
     /// Applies the next configured facet, or returns objects when the chain ends.
@@ -647,10 +960,7 @@ impl VirtualFileSystem {
         loop {
             let Some(level) = context.facet_policy().levels().get(next_facet).cloned() else {
                 let content = self.query_content(context.preselections(), None).await?;
-                return Ok(LoadedLayer {
-                    object_count: content.object_count,
-                    specs: self.content_specs(content, context, None),
-                });
+                return Ok(LoadedLayer::from_objects(content));
             };
 
             let grouped = self
@@ -658,10 +968,7 @@ impl VirtualFileSystem {
                 .await?;
             let object_count = grouped.object_count;
             if level.retains(object_count) {
-                return Ok(LoadedLayer {
-                    object_count,
-                    specs: self.content_specs(grouped, context, Some(next_facet)),
-                });
+                return Ok(LoadedLayer::from_folders(grouped, context, next_facet));
             }
 
             next_facet += 1;
@@ -684,222 +991,6 @@ impl VirtualFileSystem {
         }
 
         Ok(builder.build()?.execute(&self.inner.client).await?)
-    }
-
-    /// Converts one RIS response into graph-independent child specifications.
-    fn content_specs(
-        &self,
-        content: RepositoryContent,
-        context: ExpansionContext,
-        facet_index: Option<usize>,
-    ) -> Vec<NodeSpec> {
-        let fallback_index = context.facet_policy().levels().len();
-        let mut specs = Vec::with_capacity(content.folders.len() + content.objects.len());
-
-        for folder in content.folders {
-            let expansion = context.child_facet(
-                folder.preselection(),
-                facet_index.unwrap_or(fallback_index),
-                folder.object_count,
-                folder.has_children_of_same_facet,
-            );
-            specs.push(NodeSpec {
-                label: folder_label(&folder.display_name, &folder.name),
-                kind: NodeKind::Facet {
-                    facet: folder.facet.to_string(),
-                    value: folder.name,
-                    object_count: folder.object_count,
-                    has_children_of_same_facet: folder.has_children_of_same_facet,
-                },
-                expansion,
-                object: None,
-            });
-        }
-        specs.extend(content.objects.into_iter().map(object_spec));
-        sort_specs(&mut specs);
-        specs
-    }
-}
-
-/// Converts root configuration into its initial node and expansion recipe.
-fn mount_spec(mount: Mount) -> NodeSpec {
-    let Mount {
-        label,
-        target,
-        facet_policy,
-    } = mount;
-    match target {
-        MountTarget::SystemLibrary => NodeSpec {
-            label,
-            kind: NodeKind::Mount {
-                mount: MountKind::SystemLibrary,
-            },
-            expansion: Expansion::PackageIndex {
-                context: ExpansionContext::new(facet_policy, Vec::new()),
-            },
-            object: None,
-        },
-        MountTarget::Package(package) => NodeSpec {
-            label,
-            kind: NodeKind::Package {
-                package: package.clone(),
-                object_count: None,
-            },
-            expansion: Expansion::Package {
-                package,
-                context: ExpansionContext::new(facet_policy, Vec::new()),
-            },
-            object: None,
-        },
-        MountTarget::Selection(preselections) => NodeSpec {
-            label,
-            kind: NodeKind::Mount {
-                mount: MountKind::Selection,
-            },
-            expansion: Expansion::Selection {
-                context: ExpansionContext::new(facet_policy, preselections),
-            },
-            object: None,
-        },
-    }
-}
-
-fn package_specs(content: RepositoryContent, context: ExpansionContext) -> Vec<NodeSpec> {
-    let mut specs = content
-        .folders
-        .into_iter()
-        .filter(|folder| folder.facet == RepositoryFacet::PACKAGE && !folder.is_direct_assignment())
-        .map(|folder| NodeSpec {
-            label: folder_label(&folder.display_name, &folder.name),
-            kind: NodeKind::Package {
-                package: folder.name.clone(),
-                object_count: Some(folder.object_count),
-            },
-            expansion: context.child_package(folder.name),
-            object: None,
-        })
-        .collect::<Vec<_>>();
-    sort_specs(&mut specs);
-    specs
-}
-
-fn object_spec(entry: RepositoryObjectEntry) -> NodeSpec {
-    let object = ObjectNode {
-        name: entry.name.clone(),
-        package: entry.package.clone(),
-        object_type: entry.object_type.to_string(),
-        uri: entry.reference.uri().to_string(),
-        virtual_workbench_uri: entry.virtual_workbench_uri.clone(),
-        version: entry.version.clone(),
-        expandable: entry.expandable,
-        description: entry.description.clone(),
-    };
-    NodeSpec {
-        label: entry.name.clone(),
-        kind: NodeKind::Object { object },
-        expansion: Expansion::Leaf,
-        object: Some(entry),
-    }
-}
-
-fn folder_label(display_name: &str, technical_name: &str) -> String {
-    if display_name.is_empty() {
-        technical_name.to_owned()
-    } else {
-        display_name.to_owned()
-    }
-}
-
-fn sort_specs(specs: &mut [NodeSpec]) {
-    specs.sort_by(|left, right| {
-        node_rank(&left.kind)
-            .cmp(&node_rank(&right.kind))
-            .then_with(|| {
-                left.label
-                    .to_ascii_lowercase()
-                    .cmp(&right.label.to_ascii_lowercase())
-            })
-            .then_with(|| left.label.cmp(&right.label))
-    });
-}
-
-fn node_rank(kind: &NodeKind) -> u8 {
-    match kind {
-        NodeKind::Root | NodeKind::Mount { .. } => 0,
-        NodeKind::Package { .. } => 1,
-        NodeKind::Facet { .. } => 2,
-        NodeKind::Object { .. } => 3,
-    }
-}
-
-fn insert_specs(graph: &mut Graph, parent: NodeId, specs: Vec<NodeSpec>) -> Vec<u64> {
-    specs
-        .into_iter()
-        .map(|spec| {
-            insert_spec(graph, parent, spec)
-                .index_for(graph.scope)
-                .expect("a newly inserted node belongs to its graph")
-        })
-        .collect()
-}
-
-fn insert_spec(graph: &mut Graph, parent: NodeId, spec: NodeSpec) -> NodeId {
-    graph.insert(Some(parent), spec)
-}
-
-fn snapshots(graph: &Graph, ids: &[u64]) -> Result<Vec<Node>, VfsError> {
-    ids.iter()
-        .map(|id| {
-            graph
-                .nodes
-                .get(id)
-                .map(|record| record.node.clone())
-                .ok_or(VfsError::UnknownNode(NodeId::new(graph.scope, *id)))
-        })
-        .collect()
-}
-
-fn remove_subtrees(graph: &mut Graph, roots: Vec<u64>) {
-    let mut pending = roots;
-    while let Some(id) = pending.pop() {
-        if let Some(record) = graph.nodes.remove(&id)
-            && let Some(children) = record.children
-        {
-            pending.extend(children);
-        }
-    }
-}
-
-fn update_facet_state(
-    record: &mut NodeRecord,
-    object_count: Option<u32>,
-    has_children_of_same_facet: Option<bool>,
-) {
-    if let NodeKind::Facet {
-        object_count: count,
-        has_children_of_same_facet: has_children,
-        ..
-    } = &mut record.node.kind
-    {
-        if let Some(object_count) = object_count {
-            *count = object_count;
-        }
-        if let Some(has_children_of_same_facet) = has_children_of_same_facet {
-            *has_children = has_children_of_same_facet;
-        }
-    }
-    if let Expansion::Facet {
-        object_count: count,
-        has_children_of_same_facet: has_children,
-        ..
-    } = &mut record.expansion
-    {
-        if let Some(object_count) = object_count {
-            *count = object_count;
-        }
-        if let Some(has_children_of_same_facet) = has_children_of_same_facet {
-            *has_children = has_children_of_same_facet;
-        }
     }
 }
 

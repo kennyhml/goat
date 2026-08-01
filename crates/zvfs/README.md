@@ -1,4 +1,3 @@
 # zvfs
 
-A lazy virtual filesystem implementation backed by the ADT repository information system.
-
+A lazy virtual repository tree backed by the ADT repository information system.
