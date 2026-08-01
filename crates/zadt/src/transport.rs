@@ -4,10 +4,12 @@ use crate::{AdtRequest, AdtResponse, TransportError};
 
 #[cfg(feature = "reqwest")]
 mod reqwest_transport;
+#[cfg(feature = "logging")]
 mod traced;
 
 #[cfg(feature = "reqwest")]
 pub use reqwest_transport::{ReqwestTransport, ReqwestTransportBuilder};
+#[cfg(feature = "logging")]
 pub use traced::Traced;
 
 /// Carries transport agnostics ADT requests to an SAP system.
@@ -20,6 +22,7 @@ pub trait Transport: Send + Sync {
 }
 
 /// Convenience decorators available for every concrete [`Transport`].
+#[cfg(feature = "logging")]
 pub trait TransportExt: Transport + Sized {
     /// Wraps this transport with structured ADT call tracing.
     fn traced(self) -> Traced<Self> {
@@ -27,4 +30,5 @@ pub trait TransportExt: Transport + Sized {
     }
 }
 
+#[cfg(feature = "logging")]
 impl<T: Transport + Sized> TransportExt for T {}

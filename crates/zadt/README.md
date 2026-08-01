@@ -56,9 +56,17 @@ transports can implement the `Transport` trait. Stateless operations execute
 directly through `Client`; operations requiring a persistent SAP user session
 are represented separately as stateful operations.
 
-Importing `TransportExt` adds `.traced()` to every concrete transport. The
-decorator emits redacted structured `tracing` events that a CLI, language
-server, or test subscriber can route to its preferred output.
+Enabling the `logging` feature and importing `TransportExt` adds `.traced()` to
+every concrete transport. The decorator emits redacted structured `tracing`
+events that a CLI, language server, or test subscriber can route to its
+preferred output.
+
+Request and response bodies remain omitted by default. Diagnostic applications
+can opt in with `.traced().with_body_logging(max_bytes)`. Textual request bodies
+are logged as UTF-8, while XML requests and responses are indented when valid.
+Other response media types and bodies over the configured limit are omitted.
+Body logs can contain source code or business data and should not be enabled in
+normal production logging.
 
 ### SAP session terminology
 

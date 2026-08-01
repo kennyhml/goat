@@ -64,8 +64,10 @@ pub use resource::{
     ObjectEnhancementOptionsRef, ObjectStateRef, ObjectStructureRef, OwnedResourceRef, ParserRef,
     Relations, SourceEnhancementOptionsRef, SourceRef, SourceVersionsRef, TextElementsRef,
 };
+pub use transport::Transport;
 #[cfg(feature = "reqwest")]
 pub use transport::{ReqwestTransport, ReqwestTransportBuilder};
-pub use transport::{Traced, Transport, TransportExt};
+#[cfg(feature = "logging")]
+pub use transport::{Traced, TransportExt};
 pub use uri::{ADT_RESOURCE_ROOT, ADT_ROOT, AdtUri, AdtUriError};
 pub use vocabulary::{CategoryId, PostAction};
