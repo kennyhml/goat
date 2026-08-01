@@ -1,9 +1,18 @@
 //! Lazy repository-tree storage and expansion.
 //!
-//! The graph contains only nodes discovered so far. Each record combines a
-//! public node snapshot with a private [`Expansion`] recipe for loading its
-//! children. Graph locks cover short in-memory reads and writes only; ADT
-//! requests run outside the graph lock and are deduplicated per node.
+//! The graph is realized through a hash map, allowing constant look up
+//! times to any nodes in the tree without having to traverse the path from
+//! the root, as node references cannot cross network call boundaries.
+//!
+//! The tree graph is lazy, meaning nodes are only fetched at the time they are
+//! needed. The definition of that time is left to the consumer of the vfs.
+//!
+//! Internally, each record wraps a public [`Node`] with private metadata and an
+//! [`Expansion`] strategy, which defines how that node will be expanded. Lock
+//! retention is kept to an absolute minimum, locking the graph is only for read
+//! and write access. During expansion (which inevitably invokes an I/O request),
+//! a node-local mutex ensures data consistency on concurrent read requests without
+//! keeping the rest of the graph locked.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -22,22 +31,31 @@ use crate::{
 };
 
 /// A cheap, shared handle to a lazy repository tree.
+///
+/// Much like the ADT client it holds, it is safe to hold
+/// references to this VFS in various places.
 #[derive(Clone)]
-pub struct RepositoryVfs {
+pub struct VirtualFileSystem {
     inner: Arc<Inner>,
 }
 
 struct Inner {
     client: Client<Ready>,
-    facet_policy: FacetPolicy,
     root: NodeId,
     graph: RwLock<Graph>,
 }
 
 /// Mutable node storage for one VFS instance.
 ///
-/// Public IDs include `scope`, while records use their compact numeric index.
-/// Indices are never reused, so removed descendants cannot alias later nodes.
+/// Access must be synchronized because lazy expansion and refresh mutate the
+/// graph through shared handles.
+///
+/// Public node IDs contain a graph scope and numeric index. Each externally
+/// supplied ID is validated against this graph's scope before its index is used.
+/// Internally, record-map keys and child links use only numeric indices.
+///
+/// Indices are never reused, so a stale ID cannot resolve to a node inserted
+/// after the original record was removed.
 struct Graph {
     scope: Uuid,
     next_index: u64,
@@ -106,27 +124,84 @@ impl NodeRecord {
     }
 }
 
+/// Immutable mount configuration and the complete RIS filter path to one node.
+#[derive(Clone)]
+struct ExpansionContext {
+    facet_policy: Arc<FacetPolicy>,
+    preselections: Vec<RepositoryPreselection>,
+}
+
+impl ExpansionContext {
+    fn new(facet_policy: FacetPolicy, preselections: Vec<RepositoryPreselection>) -> Self {
+        Self {
+            facet_policy: Arc::new(facet_policy),
+            preselections,
+        }
+    }
+
+    fn facet_policy(&self) -> &FacetPolicy {
+        &self.facet_policy
+    }
+
+    fn preselections(&self) -> &[RepositoryPreselection] {
+        &self.preselections
+    }
+
+    fn selected_values(&self, facet: &RepositoryFacet) -> &[String] {
+        self.preselections
+            .iter()
+            .rev()
+            .find(|preselection| preselection.facet() == facet)
+            .map(RepositoryPreselection::values)
+            .unwrap_or_default()
+    }
+
+    fn with_preselection(&self, preselection: RepositoryPreselection) -> Self {
+        let mut context = self.clone();
+        context.preselections.push(preselection);
+        context
+    }
+
+    fn child_package(&self, package: String) -> Expansion {
+        Expansion::Package {
+            package,
+            context: self.clone(),
+        }
+    }
+
+    fn child_facet(
+        &self,
+        preselection: RepositoryPreselection,
+        facet_index: usize,
+        object_count: u32,
+        has_children_of_same_facet: bool,
+    ) -> Expansion {
+        Expansion::Facet {
+            context: self.with_preselection(preselection),
+            facet_index,
+            object_count,
+            has_children_of_same_facet,
+        }
+    }
+}
+
 /// Describes how one directory obtains its immediate children.
 #[derive(Clone)]
 enum Expansion {
     /// A directory whose children were installed while constructing the VFS.
     Static,
     /// The top-level package hierarchy used by a system-library mount.
-    PackageIndex {
-        preselections: Vec<RepositoryPreselection>,
-    },
+    PackageIndex { context: ExpansionContext },
     /// One package, expanded into child packages and directly assigned content.
     Package {
         package: String,
-        preselections: Vec<RepositoryPreselection>,
+        context: ExpansionContext,
     },
     /// An arbitrary caller-provided RIS selection.
-    Selection {
-        preselections: Vec<RepositoryPreselection>,
-    },
+    Selection { context: ExpansionContext },
     /// A virtual folder within the configured facet chain.
     Facet {
-        preselections: Vec<RepositoryPreselection>,
+        context: ExpansionContext,
         facet_index: usize,
         object_count: u32,
         has_children_of_same_facet: bool,
@@ -154,19 +229,17 @@ struct LoadedLayer {
     object_count: u32,
 }
 
-/// Configures and creates a [`RepositoryVfs`].
-pub struct RepositoryVfsBuilder {
+/// Configures and creates a [`VirtualFileSystem`].
+pub struct VirtualFileSystemBuilder {
     client: Client<Ready>,
     mounts: Vec<Mount>,
-    facet_policy: FacetPolicy,
 }
 
-impl RepositoryVfsBuilder {
+impl VirtualFileSystemBuilder {
     fn new(client: Client<Ready>) -> Self {
         Self {
             client,
             mounts: Vec::new(),
-            facet_policy: FacetPolicy::default(),
         }
     }
 
@@ -182,25 +255,19 @@ impl RepositoryVfsBuilder {
         self
     }
 
-    /// Sets the virtual-facet policy used below all mounts.
-    pub fn facet_policy(mut self, facet_policy: FacetPolicy) -> Self {
-        self.facet_policy = facet_policy;
-        self
-    }
-
     /// Builds an in-memory tree without making an ADT request.
-    pub fn build(self) -> RepositoryVfs {
-        RepositoryVfs::from_builder(self)
+    pub fn build(self) -> VirtualFileSystem {
+        VirtualFileSystem::from_builder(self)
     }
 }
 
-impl RepositoryVfs {
+impl VirtualFileSystem {
     /// Starts configuring a VFS backed by an already discovered ADT client.
-    pub fn builder(client: Client<Ready>) -> RepositoryVfsBuilder {
-        RepositoryVfsBuilder::new(client)
+    pub fn builder(client: Client<Ready>) -> VirtualFileSystemBuilder {
+        VirtualFileSystemBuilder::new(client)
     }
 
-    fn from_builder(builder: RepositoryVfsBuilder) -> Self {
+    fn from_builder(builder: VirtualFileSystemBuilder) -> Self {
         let mut graph = Graph::new();
         let root = graph.insert(
             None,
@@ -232,7 +299,6 @@ impl RepositoryVfs {
         Self {
             inner: Arc::new(Inner {
                 client: builder.client,
-                facet_policy: builder.facet_policy,
                 root,
                 graph: RwLock::new(graph),
             }),
@@ -242,11 +308,6 @@ impl RepositoryVfs {
     /// Returns the static root node identity.
     pub fn root(&self) -> NodeId {
         self.inner.root
-    }
-
-    /// Returns the configured facet policy.
-    pub fn facet_policy(&self) -> &FacetPolicy {
-        &self.inner.facet_policy
     }
 
     /// Returns a snapshot of an already known node without loading it.
@@ -296,6 +357,55 @@ impl RepositoryVfs {
             .as_deref()
             .map(|children| snapshots(&graph, children))
             .transpose()
+    }
+
+    /// Renders the currently materialized nodes as a directory tree.
+    ///
+    /// This method performs no ADT requests. Nodes that have not been expanded
+    /// are included, but no descendants are shown for them.
+    ///
+    /// ```text
+    /// /
+    /// └── Package
+    ///     └── Object
+    /// ```
+    pub fn render_tree(&self) -> String {
+        let graph = self.inner.graph.read();
+        let root_index = graph
+            .index(self.inner.root)
+            .expect("the root remains present for the lifetime of the VFS");
+        let root = graph
+            .nodes
+            .get(&root_index)
+            .expect("the root remains present for the lifetime of the VFS");
+        let mut rendered = root.node.label.clone();
+        let mut pending = Vec::new();
+
+        if let Some(children) = &root.children {
+            for (position, child) in children.iter().copied().enumerate().rev() {
+                pending.push((child, String::new(), position + 1 == children.len()));
+            }
+        }
+
+        while let Some((index, prefix, is_last)) = pending.pop() {
+            let record = graph
+                .nodes
+                .get(&index)
+                .expect("child indices always reference existing records");
+            rendered.push('\n');
+            rendered.push_str(&prefix);
+            rendered.push_str(if is_last { "└── " } else { "├── " });
+            rendered.push_str(&record.node.label);
+
+            if let Some(children) = &record.children {
+                let child_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
+                for (position, child) in children.iter().copied().enumerate().rev() {
+                    pending.push((child, child_prefix.clone(), position + 1 == children.len()));
+                }
+            }
+        }
+
+        rendered
     }
 
     /// Loads and caches one nodes immediate children. The graph lock is only held
@@ -402,26 +512,23 @@ impl RepositoryVfs {
     async fn load(&self, expansion: Expansion, refresh: bool) -> Result<Loaded, VfsError> {
         match expansion {
             Expansion::Static => unreachable!("static nodes have preloaded children"),
-            Expansion::PackageIndex { preselections } => {
+            Expansion::PackageIndex { context } => {
                 let content = self
-                    .query_content(&preselections, Some(RepositoryFacet::PACKAGE))
+                    .query_content(context.preselections(), Some(RepositoryFacet::PACKAGE))
                     .await?;
                 Ok(Loaded {
-                    specs: package_specs(content, preselections),
+                    specs: package_specs(content, context),
                     object_count: None,
                     has_children_of_same_facet: None,
                 })
             }
-            Expansion::Package {
-                package,
-                preselections,
-            } => Ok(Loaded {
-                specs: self.load_package(package, preselections).await?,
+            Expansion::Package { package, context } => Ok(Loaded {
+                specs: self.load_package(package, context).await?,
                 object_count: None,
                 has_children_of_same_facet: None,
             }),
-            Expansion::Selection { preselections } => {
-                let layer = self.load_object_layer(preselections, 0).await?;
+            Expansion::Selection { context } => {
+                let layer = self.load_object_layer(context, 0).await?;
                 Ok(Loaded {
                     specs: layer.specs,
                     object_count: None,
@@ -429,20 +536,20 @@ impl RepositoryVfs {
                 })
             }
             Expansion::Facet {
-                preselections,
+                context,
                 facet_index,
                 has_children_of_same_facet,
                 ..
             } => {
                 if refresh {
-                    return self.refresh_facet(preselections, facet_index).await;
+                    return self.refresh_facet(context, facet_index).await;
                 }
                 let next_facet = if has_children_of_same_facet {
                     facet_index
                 } else {
                     facet_index + 1
                 };
-                let layer = self.load_object_layer(preselections, next_facet).await?;
+                let layer = self.load_object_layer(context, next_facet).await?;
                 Ok(Loaded {
                     specs: layer.specs,
                     object_count: Some(layer.object_count),
@@ -456,28 +563,22 @@ impl RepositoryVfs {
     /// Re-probes a facet so changes to same-facet hierarchy are discovered.
     async fn refresh_facet(
         &self,
-        preselections: Vec<RepositoryPreselection>,
+        context: ExpansionContext,
         facet_index: usize,
     ) -> Result<Loaded, VfsError> {
-        let Some(facet) = self.inner.facet_policy.facets().get(facet_index).cloned() else {
-            let layer = self
-                .load_object_layer(preselections, facet_index + 1)
-                .await?;
+        let Some(level) = context.facet_policy().levels().get(facet_index).cloned() else {
+            let layer = self.load_object_layer(context, facet_index + 1).await?;
             return Ok(Loaded {
                 specs: layer.specs,
                 object_count: Some(layer.object_count),
                 has_children_of_same_facet: None,
             });
         };
+        let facet = level.facet().clone();
 
-        let selected_values = preselections
-            .iter()
-            .rev()
-            .find(|preselection| preselection.facet() == &facet)
-            .map(RepositoryPreselection::values)
-            .unwrap_or_default();
+        let selected_values = context.selected_values(&facet);
         let mut same_facet = self
-            .query_content(&preselections, Some(facet.clone()))
+            .query_content(context.preselections(), Some(facet.clone()))
             .await?;
         same_facet.folders.retain(|folder| {
             folder.facet == facet && !selected_values.iter().any(|value| value == &folder.name)
@@ -485,16 +586,12 @@ impl RepositoryVfs {
 
         if !same_facet.folders.is_empty() {
             let object_count = same_facet.object_count;
-            let specs = if self
-                .inner
-                .facet_policy
-                .minimum_objects()
-                .is_some_and(|minimum| object_count < minimum)
-            {
-                let flat = self.query_content(&preselections, None).await?;
-                self.content_specs(flat, preselections, None)
+            let specs = if level.retains(object_count) {
+                self.content_specs(same_facet, context, Some(facet_index))
             } else {
-                self.content_specs(same_facet, preselections, Some(facet_index))
+                self.load_object_layer(context, facet_index + 1)
+                    .await?
+                    .specs
             };
             return Ok(Loaded {
                 specs,
@@ -503,9 +600,7 @@ impl RepositoryVfs {
             });
         }
 
-        let layer = self
-            .load_object_layer(preselections, facet_index + 1)
-            .await?;
+        let layer = self.load_object_layer(context, facet_index + 1).await?;
         Ok(Loaded {
             specs: layer.specs,
             object_count: Some(layer.object_count),
@@ -517,21 +612,25 @@ impl RepositoryVfs {
     async fn load_package(
         &self,
         package: String,
-        preselections: Vec<RepositoryPreselection>,
+        context: ExpansionContext,
     ) -> Result<Vec<NodeSpec>, VfsError> {
-        let mut child_selection = preselections.clone();
+        let mut child_selection = context.preselections().to_vec();
         child_selection.push(RepositoryPreselection::new(
             RepositoryFacet::PACKAGE,
             package.clone(),
         ));
-        let mut direct_selection = preselections.clone();
-        direct_selection.push(RepositoryPreselection::direct_package(package));
+        let direct_context =
+            context.with_preselection(RepositoryPreselection::direct_package(package.clone()));
 
         let child_packages = self.query_content(&child_selection, Some(RepositoryFacet::PACKAGE));
-        let direct_objects = self.load_object_layer(direct_selection, 0);
-        let (child_packages, direct_objects) = try_join(child_packages, direct_objects).await?;
+        let direct_objects = self.load_object_layer(direct_context, 0);
+        let (mut child_packages, direct_objects) = try_join(child_packages, direct_objects).await?;
+        // RIS echoes the selected package in its own expansion.
+        child_packages
+            .folders
+            .retain(|folder| folder.facet != RepositoryFacet::PACKAGE || folder.name != package);
 
-        let mut specs = package_specs(child_packages, preselections);
+        let mut specs = package_specs(child_packages, context);
         specs.extend(direct_objects.specs);
         sort_specs(&mut specs);
         Ok(specs)
@@ -539,39 +638,34 @@ impl RepositoryVfs {
 
     /// Applies the next configured facet, or returns objects when the chain ends.
     ///
-    /// Adaptive policies first inspect the grouped response count and fall back
-    /// to a flat object response when the layer is below the threshold.
+    /// Adaptive levels below their threshold are skipped independently.
     async fn load_object_layer(
         &self,
-        preselections: Vec<RepositoryPreselection>,
-        next_facet: usize,
+        context: ExpansionContext,
+        mut next_facet: usize,
     ) -> Result<LoadedLayer, VfsError> {
-        let policy = &self.inner.facet_policy;
-        let Some(facet) = policy.facets().get(next_facet).cloned() else {
-            let content = self.query_content(&preselections, None).await?;
-            return Ok(LoadedLayer {
-                object_count: content.object_count,
-                specs: self.content_specs(content, preselections, None),
-            });
-        };
+        loop {
+            let Some(level) = context.facet_policy().levels().get(next_facet).cloned() else {
+                let content = self.query_content(context.preselections(), None).await?;
+                return Ok(LoadedLayer {
+                    object_count: content.object_count,
+                    specs: self.content_specs(content, context, None),
+                });
+            };
 
-        let grouped = self.query_content(&preselections, Some(facet)).await?;
+            let grouped = self
+                .query_content(context.preselections(), Some(level.facet().clone()))
+                .await?;
+            let object_count = grouped.object_count;
+            if level.retains(object_count) {
+                return Ok(LoadedLayer {
+                    object_count,
+                    specs: self.content_specs(grouped, context, Some(next_facet)),
+                });
+            }
 
-        // did we hit the adaptive threshold? if not we just inline all objects
-        if let Some(minimum) = policy.minimum_objects()
-            && grouped.object_count < minimum
-        {
-            let content = self.query_content(&preselections, None).await?;
-            return Ok(LoadedLayer {
-                object_count: content.object_count,
-                specs: self.content_specs(content, preselections, None),
-            });
+            next_facet += 1;
         }
-
-        Ok(LoadedLayer {
-            object_count: grouped.object_count,
-            specs: self.content_specs(grouped, preselections, Some(next_facet)),
-        })
     }
 
     async fn query_content(
@@ -596,15 +690,19 @@ impl RepositoryVfs {
     fn content_specs(
         &self,
         content: RepositoryContent,
-        preselections: Vec<RepositoryPreselection>,
+        context: ExpansionContext,
         facet_index: Option<usize>,
     ) -> Vec<NodeSpec> {
-        let fallback_index = self.inner.facet_policy.facets().len();
+        let fallback_index = context.facet_policy().levels().len();
         let mut specs = Vec::with_capacity(content.folders.len() + content.objects.len());
 
         for folder in content.folders {
-            let mut child_selection = preselections.clone();
-            child_selection.push(folder.preselection());
+            let expansion = context.child_facet(
+                folder.preselection(),
+                facet_index.unwrap_or(fallback_index),
+                folder.object_count,
+                folder.has_children_of_same_facet,
+            );
             specs.push(NodeSpec {
                 label: folder_label(&folder.display_name, &folder.name),
                 kind: NodeKind::Facet {
@@ -613,12 +711,7 @@ impl RepositoryVfs {
                     object_count: folder.object_count,
                     has_children_of_same_facet: folder.has_children_of_same_facet,
                 },
-                expansion: Expansion::Facet {
-                    preselections: child_selection,
-                    facet_index: facet_index.unwrap_or(fallback_index),
-                    object_count: folder.object_count,
-                    has_children_of_same_facet: folder.has_children_of_same_facet,
-                },
+                expansion,
                 object: None,
             });
         }
@@ -630,44 +723,48 @@ impl RepositoryVfs {
 
 /// Converts root configuration into its initial node and expansion recipe.
 fn mount_spec(mount: Mount) -> NodeSpec {
-    match mount.target {
+    let Mount {
+        label,
+        target,
+        facet_policy,
+    } = mount;
+    match target {
         MountTarget::SystemLibrary => NodeSpec {
-            label: mount.label,
+            label,
             kind: NodeKind::Mount {
                 mount: MountKind::SystemLibrary,
             },
             expansion: Expansion::PackageIndex {
-                preselections: Vec::new(),
+                context: ExpansionContext::new(facet_policy, Vec::new()),
             },
             object: None,
         },
         MountTarget::Package(package) => NodeSpec {
-            label: mount.label,
+            label,
             kind: NodeKind::Package {
                 package: package.clone(),
                 object_count: None,
             },
             expansion: Expansion::Package {
                 package,
-                preselections: Vec::new(),
+                context: ExpansionContext::new(facet_policy, Vec::new()),
             },
             object: None,
         },
         MountTarget::Selection(preselections) => NodeSpec {
-            label: mount.label,
+            label,
             kind: NodeKind::Mount {
                 mount: MountKind::Selection,
             },
-            expansion: Expansion::Selection { preselections },
+            expansion: Expansion::Selection {
+                context: ExpansionContext::new(facet_policy, preselections),
+            },
             object: None,
         },
     }
 }
 
-fn package_specs(
-    content: RepositoryContent,
-    preselections: Vec<RepositoryPreselection>,
-) -> Vec<NodeSpec> {
+fn package_specs(content: RepositoryContent, context: ExpansionContext) -> Vec<NodeSpec> {
     let mut specs = content
         .folders
         .into_iter()
@@ -678,10 +775,7 @@ fn package_specs(
                 package: folder.name.clone(),
                 object_count: Some(folder.object_count),
             },
-            expansion: Expansion::Package {
-                package: folder.name,
-                preselections: preselections.clone(),
-            },
+            expansion: context.child_package(folder.name),
             object: None,
         })
         .collect::<Vec<_>>();
@@ -806,5 +900,153 @@ fn update_facet_state(
         if let Some(has_children_of_same_facet) = has_children_of_same_facet {
             *has_children = has_children_of_same_facet;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::FacetLevel;
+
+    fn facet_context(expansion: Expansion) -> ExpansionContext {
+        match expansion {
+            Expansion::Facet { context, .. } => context,
+            _ => panic!("expected a facet expansion"),
+        }
+    }
+
+    #[test]
+    fn facet_children_share_the_policy_and_append_their_selection() {
+        let context = ExpansionContext::new(
+            FacetPolicy::new([
+                FacetLevel::always(RepositoryFacet::OWNER),
+                FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
+            ]),
+            vec![RepositoryPreselection::direct_package("$TMP")],
+        );
+
+        let expansion = context.child_facet(
+            RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER"),
+            0,
+            12,
+            false,
+        );
+        let Expansion::Facet {
+            context: child,
+            facet_index,
+            object_count,
+            has_children_of_same_facet,
+        } = expansion
+        else {
+            panic!("expected a facet expansion");
+        };
+
+        assert!(Arc::ptr_eq(&context.facet_policy, &child.facet_policy));
+        assert_eq!(context.preselections().len(), 1);
+        assert_eq!(child.preselections().len(), 2);
+        assert_eq!(
+            child.selected_values(&RepositoryFacet::OWNER),
+            ["DEVELOPER"]
+        );
+        assert_eq!(facet_index, 0);
+        assert_eq!(object_count, 12);
+        assert!(!has_children_of_same_facet);
+    }
+
+    #[test]
+    fn selected_values_use_the_deepest_selection_of_the_same_facet() {
+        let context = ExpansionContext::new(
+            FacetPolicy::grouped([RepositoryFacet::OWNER]),
+            vec![RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER").include("ALICE")],
+        );
+        let child = facet_context(context.child_facet(
+            RepositoryPreselection::new(RepositoryFacet::OWNER, "ALICE"),
+            0,
+            1,
+            false,
+        ));
+
+        assert_eq!(
+            context.selected_values(&RepositoryFacet::OWNER),
+            ["DEVELOPER", "ALICE"]
+        );
+        assert_eq!(child.selected_values(&RepositoryFacet::OWNER), ["ALICE"]);
+    }
+
+    #[test]
+    fn chained_facet_children_retain_the_complete_filter_path() {
+        let context = ExpansionContext::new(
+            FacetPolicy::grouped([
+                RepositoryFacet::OWNER,
+                RepositoryFacet::GROUP,
+                RepositoryFacet::TYPE,
+            ]),
+            vec![
+                RepositoryPreselection::direct_package("$TMP"),
+                RepositoryPreselection::new(RepositoryFacet::FAVORITES, "$DEVELOPER"),
+            ],
+        );
+        let owner = facet_context(context.child_facet(
+            RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER"),
+            0,
+            20,
+            false,
+        ));
+        let group = facet_context(owner.child_facet(
+            RepositoryPreselection::new(RepositoryFacet::GROUP, "SOURCE_LIBRARY"),
+            1,
+            20,
+            false,
+        ));
+        let object_type = facet_context(group.child_facet(
+            RepositoryPreselection::new(RepositoryFacet::TYPE, "CLAS"),
+            2,
+            10,
+            false,
+        ));
+
+        let path = object_type
+            .preselections()
+            .iter()
+            .map(|preselection| {
+                (
+                    preselection.facet().as_str(),
+                    preselection.values()[0].as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            path,
+            [
+                ("PACKAGE", "..$TMP"),
+                ("FAV", "$DEVELOPER"),
+                ("OWNER", "DEVELOPER"),
+                ("GROUP", "SOURCE_LIBRARY"),
+                ("TYPE", "CLAS"),
+            ]
+        );
+    }
+
+    #[test]
+    fn package_children_share_the_context_without_adding_parent_packages() {
+        let context = ExpansionContext::new(
+            FacetPolicy::grouped([RepositoryFacet::OWNER]),
+            vec![RepositoryPreselection::new(
+                RepositoryFacet::API_STATE,
+                "RELEASED",
+            )],
+        );
+
+        let Expansion::Package {
+            package,
+            context: child,
+        } = context.child_package("/ROOT/CHILD".to_owned())
+        else {
+            panic!("expected a package expansion");
+        };
+
+        assert_eq!(package, "/ROOT/CHILD");
+        assert!(Arc::ptr_eq(&context.facet_policy, &child.facet_policy));
+        assert_eq!(child.preselections(), context.preselections());
     }
 }

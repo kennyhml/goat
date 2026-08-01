@@ -1,54 +1,83 @@
 use zadt::{RepositoryFacet, RepositoryPreselection};
 
-/// Controls the virtual folders inserted between a selection and its objects.
+/// One virtual-folder level in a mount's ordered facet policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FacetPolicy {
-    /// Return repository objects without virtual grouping folders.
-    Flat,
+pub enum FacetLevel {
+    /// Always retain this facet as a directory level.
+    Always { facet: RepositoryFacet },
 
-    /// Apply every configured facet in order.
-    Grouped { facets: Vec<RepositoryFacet> },
-
-    /// Apply the next facet only when the current layer contains enough objects.
+    /// Retain this facet only when the current selection contains enough objects.
     Adaptive {
-        facets: Vec<RepositoryFacet>,
+        facet: RepositoryFacet,
         minimum_objects: u32,
     },
 }
 
-impl FacetPolicy {
-    /// Creates an always-grouped policy from an ordered facet chain.
-    pub fn grouped(facets: impl IntoIterator<Item = RepositoryFacet>) -> Self {
-        Self::Grouped {
-            facets: facets.into_iter().collect(),
+impl FacetLevel {
+    /// Creates a facet level that is always retained.
+    pub fn always(facet: impl Into<RepositoryFacet>) -> Self {
+        Self::Always {
+            facet: facet.into(),
         }
     }
 
-    /// Creates a count-sensitive policy from an ordered facet chain.
-    pub fn adaptive(
-        minimum_objects: u32,
-        facets: impl IntoIterator<Item = RepositoryFacet>,
-    ) -> Self {
+    /// Creates a facet level retained at or above `minimum_objects`.
+    pub fn adaptive(facet: impl Into<RepositoryFacet>, minimum_objects: u32) -> Self {
         Self::Adaptive {
-            facets: facets.into_iter().collect(),
+            facet: facet.into(),
             minimum_objects,
         }
     }
 
-    pub(crate) fn facets(&self) -> &[RepositoryFacet] {
+    /// Returns the RIS facet represented by this level.
+    pub fn facet(&self) -> &RepositoryFacet {
         match self {
-            Self::Flat => &[],
-            Self::Grouped { facets } | Self::Adaptive { facets, .. } => facets,
+            Self::Always { facet } | Self::Adaptive { facet, .. } => facet,
         }
     }
 
-    pub(crate) fn minimum_objects(&self) -> Option<u32> {
+    /// Returns whether this level should be retained for an object count.
+    pub(crate) fn retains(&self, object_count: u32) -> bool {
         match self {
+            Self::Always { .. } => true,
             Self::Adaptive {
                 minimum_objects, ..
-            } => Some(*minimum_objects),
-            Self::Flat | Self::Grouped { .. } => None,
+            } => object_count >= *minimum_objects,
         }
+    }
+}
+
+/// Controls the virtual folders inserted between one mount and its objects.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FacetPolicy {
+    levels: Vec<FacetLevel>,
+}
+
+impl FacetPolicy {
+    /// Creates an ordered policy from independently configured facet levels.
+    pub fn new(levels: impl IntoIterator<Item = FacetLevel>) -> Self {
+        Self {
+            levels: levels.into_iter().collect(),
+        }
+    }
+
+    /// Returns repository objects without virtual grouping folders.
+    pub fn flat() -> Self {
+        Self::new([])
+    }
+
+    /// Creates an always-grouped policy from an ordered facet chain.
+    pub fn grouped<I, F>(facets: I) -> Self
+    where
+        I: IntoIterator<Item = F>,
+        F: Into<RepositoryFacet>,
+    {
+        Self::new(facets.into_iter().map(FacetLevel::always))
+    }
+
+    /// Returns the ordered facet levels.
+    pub fn levels(&self) -> &[FacetLevel] {
+        &self.levels
     }
 }
 
@@ -63,6 +92,7 @@ impl Default for FacetPolicy {
 pub struct Mount {
     pub(crate) label: String,
     pub(crate) target: MountTarget,
+    pub(crate) facet_policy: FacetPolicy,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +108,7 @@ impl Mount {
         Self {
             label: label.into(),
             target: MountTarget::SystemLibrary,
+            facet_policy: FacetPolicy::default(),
         }
     }
 
@@ -92,6 +123,7 @@ impl Mount {
         Self {
             label: label.into(),
             target: MountTarget::Package(package.into()),
+            facet_policy: FacetPolicy::default(),
         }
     }
 
@@ -103,11 +135,57 @@ impl Mount {
         Self {
             label: label.into(),
             target: MountTarget::Selection(preselections.into_iter().collect()),
+            facet_policy: FacetPolicy::default(),
         }
+    }
+
+    /// Sets the ordered virtual-folder policy for this mount.
+    pub fn facet_policy(mut self, facet_policy: FacetPolicy) -> Self {
+        self.facet_policy = facet_policy;
+        self
     }
 
     /// Returns the display label used for this mount.
     pub fn label(&self) -> &str {
         &self.label
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_policy_always_groups_by_group_then_type() {
+        let policy = FacetPolicy::default();
+
+        assert_eq!(
+            policy.levels(),
+            [
+                FacetLevel::always(RepositoryFacet::GROUP),
+                FacetLevel::always(RepositoryFacet::TYPE),
+            ]
+        );
+    }
+
+    #[test]
+    fn adaptive_thresholds_apply_only_to_their_level() {
+        let policy = FacetPolicy::new([
+            FacetLevel::always(RepositoryFacet::GROUP),
+            FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
+        ]);
+
+        assert!(policy.levels()[0].retains(0));
+        assert!(!policy.levels()[1].retains(9));
+        assert!(policy.levels()[1].retains(10));
+    }
+
+    #[test]
+    fn mount_policy_overrides_do_not_change_other_mounts() {
+        let flat = Mount::system_library("Flat").facet_policy(FacetPolicy::flat());
+        let default = Mount::system_library("Default");
+
+        assert!(flat.facet_policy.levels().is_empty());
+        assert_eq!(default.facet_policy, FacetPolicy::default());
     }
 }

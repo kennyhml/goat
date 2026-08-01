@@ -7,6 +7,7 @@ use zadt::{
     RepositoryContentQuery, RepositoryFacet, RepositoryObjectPropertiesQuery,
     RepositoryPreselection, ReqwestTransport, TransportExt,
 };
+use zvfs::{FacetLevel, FacetPolicy, Mount, VirtualFileSystem};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -31,29 +32,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .basic_auth(username, password)
         .build()?
         .traced();
-    let client = Client::new(transport);
-    Logon.execute(&client).await?;
-    let client = client.discover().await?;
+    let client = Client::new(transport).discover().await?;
 
-    let res = RepositoryContentQuery::builder()
-        .preselection(RepositoryPreselection::new(
-            RepositoryFacet::PACKAGE,
-            "$TMP",
-        ))
-        .preselection(RepositoryPreselection::new(
-            RepositoryFacet::OWNER,
-            "DEVELOPER",
-        ))
-        .preselection(RepositoryPreselection::new(
-            RepositoryFacet::GROUP,
-            "SOURCE_LIBRARY",
-        ))
-        .preselection(RepositoryPreselection::new(RepositoryFacet::TYPE, "CLAS").include("PROG"))
-        .build()?
-        .execute(&client)
-        .await?;
+    let preselections = vec![
+        RepositoryPreselection::new(RepositoryFacet::PACKAGE, "$TMP"),
+        RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER").include("DDIC"),
+    ];
 
-    println!("{:#?}", res);
+    let vfs = VirtualFileSystem::builder(client.clone())
+        .mount(
+            Mount::selection("Local Objects", preselections).facet_policy(FacetPolicy::new([
+                FacetLevel::always(RepositoryFacet::OWNER),
+                FacetLevel::always(RepositoryFacet::GROUP),
+                FacetLevel::adaptive(RepositoryFacet::TYPE, 2),
+            ])),
+        )
+        .build();
+
+    let res = vfs.children(vfs.root()).await.unwrap();
+
+    let mount_children = vfs.children(res[0].id).await.unwrap();
+    // for i in 0..mount_children.len() {
+    let dev = vfs.children(mount_children[1].id).await?;
+
+    vfs.children(dev[2].id).await?;
+    // }
+    println!("{}", vfs.render_tree());
 
     Ok(())
 }

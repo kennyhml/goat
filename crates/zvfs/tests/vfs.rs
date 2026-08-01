@@ -13,7 +13,7 @@ use zadt::{
     AdtRequest, AdtResponse, Client, RepositoryFacet, RepositoryPreselection, Transport,
     TransportError,
 };
-use zvfs::{FacetPolicy, Mount, NodeId, NodeKind, RepositoryVfs, VfsError};
+use zvfs::{FacetLevel, FacetPolicy, Mount, NodeId, NodeKind, VfsError, VirtualFileSystem};
 
 const DISCOVERY_XML: &str = include_str!("../../zadt/tests/fixtures/discovery.xml");
 
@@ -25,6 +25,8 @@ const EMPTY_XML: &str = r#"
 const CHILD_PACKAGES_XML: &str = r#"
     <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
         objectCount="7">
+        <vfs:virtualFolder name="/ROOT" displayName="Root Package" facet="PACKAGE"
+            counter="7" hasChildrenOfSameFacet="true" />
         <vfs:virtualFolder name="/ROOT/CHILD" displayName="Child Package" facet="PACKAGE"
             counter="7" hasChildrenOfSameFacet="false" />
     </vfs:virtualFoldersResult>
@@ -34,6 +36,14 @@ const GROUP_XML: &str = r#"
     <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
         objectCount="12">
         <vfs:virtualFolder name="SOURCE_LIBRARY" displayName="Source Code Library" facet="GROUP"
+            counter="12" hasChildrenOfSameFacet="false" />
+    </vfs:virtualFoldersResult>
+"#;
+
+const OWNER_XML: &str = r#"
+    <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
+        objectCount="12">
+        <vfs:virtualFolder name="DEVELOPER" displayName="DEVELOPER" facet="OWNER"
             counter="12" hasChildrenOfSameFacet="false" />
     </vfs:virtualFoldersResult>
 "#;
@@ -59,6 +69,8 @@ enum Behavior {
     Tree,
     Adaptive(u32),
     AdaptiveRefresh,
+    AdaptiveHierarchyRefresh,
+    Propagation,
     Hierarchical,
     SlowEmpty,
     FailOnce,
@@ -103,6 +115,10 @@ impl TestTransport {
                     && body.contains("<vfs:facet>PACKAGE</vfs:facet>")
                 {
                     Ok(CHILD_PACKAGES_XML.to_owned())
+                } else if body.contains("<vfs:facet>PACKAGE</vfs:facet>") {
+                    Ok(EMPTY_XML.to_owned())
+                } else if body.contains("<vfs:facet>OWNER</vfs:facet>") {
+                    Ok(OWNER_XML.to_owned())
                 } else if body.contains("<vfs:value>../ROOT</vfs:value>")
                     && body.contains("<vfs:facet>GROUP</vfs:facet>")
                 {
@@ -127,10 +143,17 @@ impl TestTransport {
                         r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="{count}">
                             <vfs:virtualFolder name="SOURCE_LIBRARY" displayName="Source Code Library"
                                 facet="GROUP" counter="{count}" hasChildrenOfSameFacet="false" />
-                        </vfs:virtualFoldersResult>"#
+                            </vfs:virtualFoldersResult>"#
                     ))
+                } else if body.contains("<vfs:facet>TYPE</vfs:facet>") {
+                    Ok(TYPE_XML
+                        .replace("objectCount=\"12\"", &format!("objectCount=\"{count}\""))
+                        .replace("counter=\"12\"", &format!("counter=\"{count}\"")))
                 } else {
-                    Ok(OBJECT_XML.to_owned())
+                    Ok(
+                        OBJECT_XML
+                            .replace("objectCount=\"1\"", &format!("objectCount=\"{count}\"")),
+                    )
                 }
             }
             Behavior::AdaptiveRefresh => match request_number {
@@ -140,11 +163,43 @@ impl TestTransport {
                 1 => Ok(TYPE_XML
                     .replace("objectCount=\"12\"", "objectCount=\"30\"")
                     .replace("counter=\"12\"", "counter=\"30\"")),
-                2 => Ok(TYPE_XML
+                2 => Ok(EMPTY_XML.replace("objectCount=\"0\"", "objectCount=\"3\"")),
+                3 => Ok(TYPE_XML
                     .replace("objectCount=\"12\"", "objectCount=\"3\"")
                     .replace("counter=\"12\"", "counter=\"3\"")),
                 _ => Ok(OBJECT_XML.replace("objectCount=\"1\"", "objectCount=\"3\"")),
             },
+            Behavior::AdaptiveHierarchyRefresh => match request_number {
+                0 => Ok(r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="20">
+                        <vfs:virtualFolder name="ROOT_APPL" displayName="Root Component" facet="APPL"
+                            counter="20" hasChildrenOfSameFacet="true" />
+                    </vfs:virtualFoldersResult>"#
+                    .to_owned()),
+                1 => Ok(r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="20">
+                        <vfs:virtualFolder name="LEAF_APPL" displayName="Leaf Component" facet="APPL"
+                            counter="20" hasChildrenOfSameFacet="false" />
+                    </vfs:virtualFoldersResult>"#
+                    .to_owned()),
+                2 => Ok(r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="3">
+                        <vfs:virtualFolder name="LEAF_APPL" displayName="Leaf Component" facet="APPL"
+                            counter="3" hasChildrenOfSameFacet="false" />
+                    </vfs:virtualFoldersResult>"#
+                    .to_owned()),
+                _ => Ok(TYPE_XML
+                    .replace("objectCount=\"12\"", "objectCount=\"3\"")
+                    .replace("counter=\"12\"", "counter=\"3\"")),
+            },
+            Behavior::Propagation => {
+                if body.contains("<vfs:facet>OWNER</vfs:facet>") {
+                    Ok(OWNER_XML.to_owned())
+                } else if body.contains("<vfs:facet>GROUP</vfs:facet>") {
+                    Ok(GROUP_XML.to_owned())
+                } else if body.contains("<vfs:facet>TYPE</vfs:facet>") {
+                    Ok(TYPE_XML.to_owned())
+                } else {
+                    Ok(OBJECT_XML.to_owned())
+                }
+            }
             Behavior::Hierarchical => {
                 if body.contains("<vfs:facet>TYPE</vfs:facet>") {
                     Ok(TYPE_XML.to_owned())
@@ -235,10 +290,64 @@ fn selection_mount(label: &str) -> Mount {
     )
 }
 
+fn flat_selection_mount(label: &str) -> Mount {
+    selection_mount(label).facet_policy(FacetPolicy::flat())
+}
+
+fn preselection_blocks<'a>(body: &'a str, facet: &str) -> Vec<&'a str> {
+    let marker = format!("<vfs:preselection facet=\"{facet}\">");
+    let end_marker = "</vfs:preselection>";
+    let mut blocks = Vec::new();
+    let mut remainder = body;
+
+    while let Some(start) = remainder.find(&marker) {
+        remainder = &remainder[start..];
+        let end = remainder
+            .find(end_marker)
+            .expect("serialized preselections are closed")
+            + end_marker.len();
+        blocks.push(&remainder[..end]);
+        remainder = &remainder[end..];
+    }
+
+    blocks
+}
+
+fn assert_preselection(body: &str, facet: &str, values: &[&str]) {
+    let blocks = preselection_blocks(body, facet);
+    assert!(
+        blocks.iter().any(|block| values
+            .iter()
+            .all(|value| { block.contains(&format!("<vfs:value>{value}</vfs:value>")) })),
+        "missing {facet} preselection with {values:?} in {body}"
+    );
+}
+
+fn assert_exact_preselection(body: &str, facet: &str, values: &[&str]) {
+    let blocks = preselection_blocks(body, facet);
+    assert!(
+        blocks.iter().any(|block| {
+            block.matches("<vfs:value>").count() == values.len()
+                && values
+                    .iter()
+                    .all(|value| block.contains(&format!("<vfs:value>{value}</vfs:value>")))
+        }),
+        "missing exact {facet} preselection with {values:?} in {body}"
+    );
+}
+
+fn assert_output_facet(body: &str, facet: Option<&str>) {
+    if let Some(facet) = facet {
+        assert!(body.contains(&format!("<vfs:facet>{facet}</vfs:facet>")));
+    } else {
+        assert!(!body.contains("<vfs:facet>"));
+    }
+}
+
 #[tokio::test]
 async fn traverses_packages_groups_types_and_objects() {
     let (client, state) = client(Behavior::Tree).await;
-    let vfs = RepositoryVfs::builder(client)
+    let vfs = VirtualFileSystem::builder(client)
         .mount(Mount::package("/ROOT"))
         .build();
 
@@ -289,6 +398,11 @@ async fn traverses_packages_groups_types_and_objects() {
     let decoded_id: NodeId = serde_json::from_str(&id_json).unwrap();
     assert_eq!(decoded_id, objects[0].id);
 
+    assert_eq!(
+        vfs.render_tree(),
+        "/\n└── /ROOT\n    ├── Child Package\n    └── Source Code Library\n        └── Classes\n            └── ZCL_DEMO"
+    );
+
     let requests = state.requests.lock().unwrap();
     assert!(
         requests
@@ -298,17 +412,71 @@ async fn traverses_packages_groups_types_and_objects() {
 }
 
 #[tokio::test]
-async fn adaptive_facets_flatten_small_layers_and_keep_large_layers() {
+async fn child_packages_inherit_their_mounts_facet_policy() {
+    let (client, state) = client(Behavior::Tree).await;
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(Mount::package("/ROOT").facet_policy(FacetPolicy::grouped([RepositoryFacet::OWNER])))
+        .build();
+    let package = vfs.children(vfs.root()).await.unwrap().remove(0);
+    let children = vfs.children(package.id).await.unwrap();
+    let child_package = children
+        .iter()
+        .find(|node| node.label == "Child Package")
+        .unwrap();
+
+    let child_contents = vfs.children(child_package.id).await.unwrap();
+
+    assert_eq!(
+        child_contents
+            .iter()
+            .map(|node| node.label.as_str())
+            .collect::<Vec<_>>(),
+        ["DEVELOPER"]
+    );
+    let requests = state.requests.lock().unwrap();
+    let root_direct = requests
+        .iter()
+        .find(|request| request.contains("<vfs:value>../ROOT</vfs:value>"))
+        .unwrap();
+    assert_output_facet(root_direct, Some("OWNER"));
+    let child_direct = requests
+        .iter()
+        .find(|request| request.contains("<vfs:value>../ROOT/CHILD</vfs:value>"))
+        .unwrap();
+    assert_output_facet(child_direct, Some("OWNER"));
+}
+
+#[tokio::test]
+async fn adaptive_type_facets_skip_small_layers_and_keep_large_layers() {
+    for (count, expected_label, expected_requests) in [(3, "ZCL_DEMO", 3), (10, "Classes", 2)] {
+        let (client, state) = client(Behavior::Adaptive(count)).await;
+        let vfs = VirtualFileSystem::builder(client)
+            .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
+                FacetLevel::always(RepositoryFacet::GROUP),
+                FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
+            ])))
+            .build();
+        let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+        let group = vfs.children(mount.id).await.unwrap().remove(0);
+
+        let children = vfs.children(group.id).await.unwrap();
+
+        assert_eq!(children[0].label, expected_label);
+        assert_eq!(state.post_count.load(Ordering::SeqCst), expected_requests);
+    }
+}
+
+#[tokio::test]
+async fn adaptive_facets_skip_only_their_own_level() {
     for (count, expected_label, expected_requests) in
-        [(3, "ZCL_DEMO", 2), (30, "Source Code Library", 1)]
+        [(3, "Classes", 2), (10, "Source Code Library", 1)]
     {
         let (client, state) = client(Behavior::Adaptive(count)).await;
-        let vfs = RepositoryVfs::builder(client)
-            .mount(selection_mount("Objects"))
-            .facet_policy(FacetPolicy::adaptive(
-                10,
-                [RepositoryFacet::GROUP, RepositoryFacet::TYPE],
-            ))
+        let vfs = VirtualFileSystem::builder(client)
+            .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
+                FacetLevel::adaptive(RepositoryFacet::GROUP, 10),
+                FacetLevel::always(RepositoryFacet::TYPE),
+            ])))
             .build();
         let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
@@ -320,14 +488,99 @@ async fn adaptive_facets_flatten_small_layers_and_keep_large_layers() {
 }
 
 #[tokio::test]
+async fn applies_facet_policies_independently_per_mount() {
+    let (client, state) = client(Behavior::Adaptive(12)).await;
+    let group_mount = Mount::selection(
+        "By Group",
+        [RepositoryPreselection::new(
+            RepositoryFacet::API_STATE,
+            "GROUP_MOUNT",
+        )],
+    )
+    .facet_policy(FacetPolicy::grouped([RepositoryFacet::GROUP]));
+    let type_mount = Mount::selection(
+        "By Type",
+        [RepositoryPreselection::new(
+            RepositoryFacet::API_STATE,
+            "TYPE_MOUNT",
+        )],
+    )
+    .facet_policy(FacetPolicy::grouped([RepositoryFacet::TYPE]));
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(group_mount)
+        .mount(type_mount)
+        .build();
+    let mounts = vfs.children(vfs.root()).await.unwrap();
+
+    let groups = vfs.children(mounts[0].id).await.unwrap();
+    let types = vfs.children(mounts[1].id).await.unwrap();
+
+    assert_eq!(groups[0].label, "Source Code Library");
+    assert_eq!(types[0].label, "Classes");
+    let requests = state.requests.lock().unwrap();
+    assert_preselection(&requests[0], "API", &["GROUP_MOUNT"]);
+    assert_output_facet(&requests[0], Some("GROUP"));
+    assert!(!requests[0].contains("TYPE_MOUNT"));
+    assert_preselection(&requests[1], "API", &["TYPE_MOUNT"]);
+    assert_output_facet(&requests[1], Some("TYPE"));
+    assert!(!requests[1].contains("GROUP_MOUNT"));
+}
+
+#[tokio::test]
+async fn carries_mount_and_selected_facet_filters_through_every_expansion() {
+    let (client, state) = client(Behavior::Propagation).await;
+    let mount = Mount::selection(
+        "Local Favorites",
+        [
+            RepositoryPreselection::direct_package("$TMP"),
+            RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER").include("ALICE"),
+            RepositoryPreselection::new(RepositoryFacet::FAVORITES, "$DEVELOPER"),
+        ],
+    )
+    .facet_policy(FacetPolicy::grouped([
+        RepositoryFacet::OWNER,
+        RepositoryFacet::GROUP,
+        RepositoryFacet::TYPE,
+    ]));
+    let vfs = VirtualFileSystem::builder(client).mount(mount).build();
+    let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+
+    let owner = vfs.children(mount.id).await.unwrap().remove(0);
+    let group = vfs.children(owner.id).await.unwrap().remove(0);
+    let object_type = vfs.children(group.id).await.unwrap().remove(0);
+    let objects = vfs.children(object_type.id).await.unwrap();
+
+    assert_eq!(objects[0].label, "ZCL_DEMO");
+    let requests = state.requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    for request in requests.iter() {
+        assert_preselection(request, "PACKAGE", &["..$TMP"]);
+        assert_preselection(request, "OWNER", &["DEVELOPER", "ALICE"]);
+        assert_preselection(request, "FAV", &["$DEVELOPER"]);
+    }
+    assert_output_facet(&requests[0], Some("OWNER"));
+    for request in &requests[1..] {
+        assert_eq!(preselection_blocks(request, "OWNER").len(), 2);
+        assert_exact_preselection(request, "OWNER", &["DEVELOPER"]);
+    }
+    assert_output_facet(&requests[1], Some("GROUP"));
+    assert_preselection(&requests[2], "GROUP", &["SOURCE_LIBRARY"]);
+    assert_output_facet(&requests[2], Some("TYPE"));
+    assert_preselection(&requests[3], "GROUP", &["SOURCE_LIBRARY"]);
+    assert_preselection(&requests[3], "TYPE", &["CLAS"]);
+    assert_output_facet(&requests[3], None);
+}
+
+#[tokio::test]
 async fn repeats_hierarchical_facets_before_advancing() {
     let (client, state) = client(Behavior::Hierarchical).await;
-    let vfs = RepositoryVfs::builder(client)
-        .mount(selection_mount("Objects"))
-        .facet_policy(FacetPolicy::grouped([
-            RepositoryFacet::APPLICATION_COMPONENT,
-            RepositoryFacet::TYPE,
-        ]))
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(
+            selection_mount("Objects").facet_policy(FacetPolicy::grouped([
+                RepositoryFacet::APPLICATION_COMPONENT,
+                RepositoryFacet::TYPE,
+            ])),
+        )
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
@@ -356,17 +609,24 @@ async fn repeats_hierarchical_facets_before_advancing() {
     ));
     let requests = state.requests.lock().unwrap();
     assert!(requests[3].contains("<vfs:facet>APPL</vfs:facet>"));
+    for request in requests.iter() {
+        assert_preselection(request, "OWNER", &["DEVELOPER"]);
+    }
+    assert_preselection(&requests[1], "APPL", &["ROOT_APPL"]);
+    assert_preselection(&requests[2], "APPL", &["ROOT_APPL"]);
+    assert_preselection(&requests[2], "APPL", &["LEAF_APPL"]);
+    assert_preselection(&requests[3], "APPL", &["ROOT_APPL"]);
+    assert_preselection(&requests[3], "APPL", &["LEAF_APPL"]);
 }
 
 #[tokio::test]
 async fn adaptive_refresh_rechecks_the_current_object_count() {
-    let (client, _) = client(Behavior::AdaptiveRefresh).await;
-    let vfs = RepositoryVfs::builder(client)
-        .mount(selection_mount("Objects"))
-        .facet_policy(FacetPolicy::adaptive(
-            10,
-            [RepositoryFacet::GROUP, RepositoryFacet::TYPE],
-        ))
+    let (client, state) = client(Behavior::AdaptiveRefresh).await;
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
+            FacetLevel::always(RepositoryFacet::GROUP),
+            FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
+        ])))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
     let group = vfs.children(mount.id).await.unwrap().remove(0);
@@ -383,15 +643,64 @@ async fn adaptive_refresh_rechecks_the_current_object_count() {
             ..
         }
     ));
+    let requests = state.requests.lock().unwrap();
+    assert_eq!(requests.len(), 5);
+    for request in requests.iter() {
+        assert_preselection(request, "OWNER", &["DEVELOPER"]);
+    }
+    assert_preselection(&requests[2], "GROUP", &["SOURCE_LIBRARY"]);
+    assert_output_facet(&requests[2], Some("GROUP"));
+    assert_preselection(&requests[3], "GROUP", &["SOURCE_LIBRARY"]);
+    assert_output_facet(&requests[3], Some("TYPE"));
+    assert_preselection(&requests[4], "GROUP", &["SOURCE_LIBRARY"]);
+    assert_output_facet(&requests[4], None);
+}
+
+#[tokio::test]
+async fn adaptive_refresh_can_skip_a_repeated_same_facet_level() {
+    let (client, state) = client(Behavior::AdaptiveHierarchyRefresh).await;
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
+            FacetLevel::adaptive(RepositoryFacet::APPLICATION_COMPONENT, 10),
+            FacetLevel::always(RepositoryFacet::TYPE),
+        ])))
+        .build();
+    let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+    let root_component = vfs.children(mount.id).await.unwrap().remove(0);
+    let old_leaf = vfs.children(root_component.id).await.unwrap().remove(0);
+
+    let refreshed = vfs.refresh(root_component.id).await.unwrap();
+
+    assert_eq!(refreshed[0].label, "Classes");
+    assert!(vfs.node(old_leaf.id).is_none());
+    assert!(matches!(
+        vfs.node(root_component.id).unwrap().kind,
+        NodeKind::Facet {
+            object_count: 3,
+            has_children_of_same_facet: true,
+            ..
+        }
+    ));
+    let requests = state.requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    for request in requests.iter() {
+        assert_preselection(request, "OWNER", &["DEVELOPER"]);
+    }
+    assert_preselection(&requests[1], "APPL", &["ROOT_APPL"]);
+    assert_output_facet(&requests[1], Some("APPL"));
+    assert_preselection(&requests[2], "APPL", &["ROOT_APPL"]);
+    assert_output_facet(&requests[2], Some("APPL"));
+    assert_preselection(&requests[3], "APPL", &["ROOT_APPL"]);
+    assert!(!requests[3].contains("LEAF_APPL"));
+    assert_output_facet(&requests[3], Some("TYPE"));
 }
 
 #[tokio::test]
 async fn scopes_loading_locks_to_individual_nodes() {
     let (client, state) = client(Behavior::SlowEmpty).await;
-    let vfs = RepositoryVfs::builder(client)
-        .mount(selection_mount("First"))
-        .mount(selection_mount("Second"))
-        .facet_policy(FacetPolicy::Flat)
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(flat_selection_mount("First"))
+        .mount(flat_selection_mount("Second"))
         .build();
     let mounts = vfs.children(vfs.root()).await.unwrap();
 
@@ -406,9 +715,8 @@ async fn scopes_loading_locks_to_individual_nodes() {
 #[tokio::test]
 async fn deduplicates_concurrent_loads_of_the_same_node() {
     let (client, state) = client(Behavior::SlowEmpty).await;
-    let vfs = RepositoryVfs::builder(client)
-        .mount(selection_mount("Objects"))
-        .facet_policy(FacetPolicy::Flat)
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(flat_selection_mount("Objects"))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
@@ -417,14 +725,14 @@ async fn deduplicates_concurrent_loads_of_the_same_node() {
     assert!(first.unwrap().is_empty());
     assert!(second.unwrap().is_empty());
     assert_eq!(state.post_count.load(Ordering::SeqCst), 1);
+    assert_output_facet(&state.requests.lock().unwrap()[0], None);
 }
 
 #[tokio::test]
 async fn retries_failed_expansions_instead_of_caching_the_error() {
     let (client, state) = client(Behavior::FailOnce).await;
-    let vfs = RepositoryVfs::builder(client)
-        .mount(selection_mount("Objects"))
-        .facet_policy(FacetPolicy::Flat)
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(flat_selection_mount("Objects"))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
@@ -436,9 +744,8 @@ async fn retries_failed_expansions_instead_of_caching_the_error() {
 #[tokio::test]
 async fn refresh_replaces_descendants_and_invalidates_old_ids() {
     let (client, _) = client(Behavior::Refresh).await;
-    let vfs = RepositoryVfs::builder(client)
-        .mount(selection_mount("Objects"))
-        .facet_policy(FacetPolicy::Flat)
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(flat_selection_mount("Objects"))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
     let first = vfs.children(mount.id).await.unwrap().remove(0);
@@ -457,9 +764,8 @@ async fn refresh_replaces_descendants_and_invalidates_old_ids() {
 #[tokio::test]
 async fn failed_refresh_preserves_the_cached_subtree() {
     let (client, _) = client(Behavior::FailRefresh).await;
-    let vfs = RepositoryVfs::builder(client)
-        .mount(selection_mount("Objects"))
-        .facet_policy(FacetPolicy::Flat)
+    let vfs = VirtualFileSystem::builder(client)
+        .mount(flat_selection_mount("Objects"))
         .build();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
     let object = vfs.children(mount.id).await.unwrap().remove(0);
@@ -475,8 +781,8 @@ async fn failed_refresh_preserves_the_cached_subtree() {
 async fn rejects_node_ids_from_another_vfs_instance() {
     let (first_client, _) = client(Behavior::SlowEmpty).await;
     let (second_client, _) = client(Behavior::SlowEmpty).await;
-    let first = RepositoryVfs::builder(first_client).build();
-    let second = RepositoryVfs::builder(second_client).build();
+    let first = VirtualFileSystem::builder(first_client).build();
+    let second = VirtualFileSystem::builder(second_client).build();
 
     assert_ne!(first.root(), second.root());
     assert!(first.node(second.root()).is_none());
