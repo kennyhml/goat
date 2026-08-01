@@ -40,7 +40,6 @@ pub type ProgramPropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<Progr
 /// - Backend handler: `CL_SEDI_ADT_PROGRAMRUN`
 #[derive(Builder, Debug)]
 #[builder(setter(into))]
-#[readonly::make]
 pub struct ProgramRun {
     /// The executable program to run.
     pub program: ObjectRef<Program>,

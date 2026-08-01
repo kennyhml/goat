@@ -141,7 +141,6 @@ impl IncludeProperties {
 
 /// The plain-text console output produced by running an ABAP program.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct ProgramRunResult {
     /// The program that was executed.
     pub reference: ObjectRef<Program>,
@@ -161,7 +160,6 @@ pub type ProgramPropertiesV2 = ProgramPropertiesV3;
 
 /// The ABAP program-properties payload shared by the V2 and V3 media types.
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct ProgramPropertiesV3 {
     /// The program resource that was fetched.
     pub reference: ObjectRef<Program>,
@@ -351,7 +349,6 @@ impl ProgramPropertiesV3 {
 
 /// The V2 standalone ABAP include-properties payload.
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct IncludePropertiesV2 {
     /// The include resource that was fetched.
     pub reference: ObjectRef<Include>,
@@ -525,7 +522,6 @@ impl IncludePropertiesV2 {
 
 /// The source parser configuration advertised by a program.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct SyntaxConfiguration {
     /// The configured ABAP language.
     pub language: SyntaxLanguage,
@@ -533,7 +529,6 @@ pub struct SyntaxConfiguration {
 
 /// An ABAP language version, description, and optional parser grammar.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct SyntaxLanguage {
     /// The language version identifier, such as `X`.
     pub version: String,

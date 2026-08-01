@@ -6,7 +6,6 @@ use crate::{EntityTag, ObjectError, ObjectRef, SourceRef};
 
 /// A fetched source representation and its attached metadata.
 #[derive(Debug)]
-#[readonly::make]
 pub struct SourceCode {
     /// The source resource that was fetched.
     pub reference: SourceRef,
@@ -43,18 +42,27 @@ pub enum AccessMode {
 /// The handle is bound to both [`ObjectRef`] and [`crate::UserSession`]. A
 /// handle string alone is not sufficient to update another resource.
 #[derive(Clone, Eq, PartialEq)]
-#[readonly::make]
 pub struct LockHandle {
     /// The locked object.
-    pub object: ObjectRef,
+    object: ObjectRef,
 
     /// The opaque handle supplied by SAP.
-    pub handle: String,
+    handle: String,
 }
 
 impl LockHandle {
     pub(crate) fn new(object: ObjectRef, handle: String) -> Self {
         Self { object, handle }
+    }
+
+    /// Returns the object this lock belongs to.
+    pub fn object(&self) -> &ObjectRef {
+        &self.object
+    }
+
+    /// Returns the opaque handle supplied by SAP.
+    pub fn handle(&self) -> &str {
+        &self.handle
     }
 }
 

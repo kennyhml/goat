@@ -144,6 +144,16 @@ impl RepositoryPreselection {
         }
     }
 
+    /// Selects objects assigned directly to a package, excluding subpackages.
+    ///
+    /// The leading `..` is RIS protocol syntax and does not denote filesystem
+    /// parent traversal.
+    pub fn direct_package(package: impl Into<String>) -> Self {
+        let package = package.into();
+        let package = package.strip_prefix("..").unwrap_or(&package);
+        Self::new(RepositoryFacet::PACKAGE, format!("..{package}"))
+    }
+
     /// Adds another included value.
     pub fn include(mut self, value: impl Into<String>) -> Self {
         self.values.push(value.into());
@@ -172,7 +182,6 @@ impl RepositoryPreselection {
 
 /// Information that helps construct the next package-hierarchy query.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct RepositoryPreselectionInfo {
     pub facet: RepositoryFacet,
     pub has_children_of_same_facet: bool,
@@ -180,7 +189,6 @@ pub struct RepositoryPreselectionInfo {
 
 /// One virtual folder returned by RIS.
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct RepositoryVirtualFolder {
     /// The technical folder value, such as `CLAS`.
     pub name: String,
@@ -208,9 +216,12 @@ impl RepositoryVirtualFolder {
 
     /// Returns the package selected by a direct-assignment folder.
     pub fn direct_assignment_package(&self) -> Option<&str> {
+        if self.facet != RepositoryFacet::PACKAGE {
+            return None;
+        }
         self.name
             .strip_prefix("..")
-            .filter(|package| package.starts_with('/'))
+            .filter(|package| !package.is_empty())
     }
 
     /// Returns links advertised for this virtual folder.
@@ -226,7 +237,6 @@ impl RepositoryVirtualFolder {
 
 /// A repository object listed in a virtual-folder result.
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct RepositoryObjectEntry {
     pub name: String,
     /// The object version when the query requested version information.
@@ -252,7 +262,6 @@ impl RepositoryObjectEntry {
 
 /// The single hierarchy layer returned by a virtual-folder content query.
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct RepositoryContent {
     pub object_count: u32,
     pub preselection_info: Option<RepositoryPreselectionInfo>,
@@ -307,7 +316,6 @@ impl RepositoryContent {
 
 /// An optional URI-template link for discovering values of a facet.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct RepositoryFacetValuesLink {
     pub title: Option<String>,
     pub relation: String,
@@ -317,7 +325,6 @@ pub struct RepositoryFacetValuesLink {
 
 /// A facet advertised by the repository information system.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct RepositoryFacetDefinition {
     /// The key exactly as advertised, commonly in lowercase.
     pub key: String,
@@ -338,7 +345,6 @@ impl RepositoryFacetDefinition {
 
 /// Facets supported by the repository information system.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct RepositoryFacets {
     pub facets: Vec<RepositoryFacetDefinition>,
 }
@@ -372,7 +378,6 @@ impl RepositoryFacets {
 
 /// The RIS description of the object whose properties were requested.
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct RepositoryObjectSummary {
     pub name: String,
     pub description: String,
@@ -392,7 +397,6 @@ impl RepositoryObjectSummary {
 
 /// One facet value associated with a repository object.
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct RepositoryProperty {
     pub facet: RepositoryFacet,
     pub value: String,
@@ -403,20 +407,6 @@ pub struct RepositoryProperty {
 }
 
 impl RepositoryProperty {
-    /// Returns the typed package referenced by a package property.
-    ///
-    /// The relation is optional because RIS only advertises it when package
-    /// properties were included in the query.
-    pub fn package(&self) -> Result<Option<ObjectRef<Package>>, ObjectError> {
-        if self.facet != RepositoryFacet::PACKAGE {
-            return Ok(None);
-        }
-        let Some(link) = self.relations.find(PACKAGE_RELATION)? else {
-            return Ok(None);
-        };
-        ObjectRef::from_parts(self.value.clone(), link.target.clone()).map(Some)
-    }
-
     /// Returns links advertised for this property value.
     pub fn relations(&self) -> &Relations {
         &self.relations
@@ -425,19 +415,30 @@ impl RepositoryProperty {
 
 /// Uniform RIS properties for an arbitrary repository object.
 #[derive(Clone, Debug)]
-#[readonly::make]
 pub struct RepositoryObjectProperties {
     pub object: RepositoryObjectSummary,
     pub properties: Vec<RepositoryProperty>,
 }
 
 impl RepositoryObjectProperties {
-    /// Returns the typed package reference advertised by the package property.
-    pub fn package(&self) -> Result<Option<ObjectRef<Package>>, ObjectError> {
+    /// Returns the package hierarchy in the top-down order emitted by RIS.
+    ///
+    /// The first entry is the root package and the final entry is the package
+    /// directly containing the object. An empty hierarchy means package
+    /// properties were not requested or the object has no package assignment.
+    pub fn package_hierarchy(&self) -> Result<Vec<ObjectRef<Package>>, ObjectError> {
         self.properties
             .iter()
-            .find(|property| property.facet == RepositoryFacet::PACKAGE)
-            .map_or(Ok(None), RepositoryProperty::package)
+            .filter(|property| property.facet == RepositoryFacet::PACKAGE)
+            .map(|property| {
+                let link = property.relations.find(PACKAGE_RELATION)?.ok_or(
+                    ObjectError::MissingRelation {
+                        relation: PACKAGE_RELATION,
+                    },
+                )?;
+                ObjectRef::from_parts(property.value.clone(), link.target.clone())
+            })
+            .collect()
     }
 
     pub(crate) fn parse(body: &[u8], object_uri: &AdtUri) -> Result<Self, RepositoryError> {
@@ -681,6 +682,8 @@ mod tests {
     const FACETS_XML: &[u8] = include_bytes!("../../tests/fixtures/repository-facets.xml");
     const OBJECT_PROPERTIES_XML: &[u8] =
         include_bytes!("../../tests/fixtures/repository-object-properties.xml");
+    const OBJECT_PROPERTIES_HIERARCHY_XML: &[u8] =
+        include_bytes!("../../tests/fixtures/repository-object-properties-hierarchy.xml");
 
     #[test]
     fn serializes_virtual_folder_filters() {
@@ -699,6 +702,19 @@ mod tests {
         assert!(xml.contains("<vfs:value>-UI5/STRU</vfs:value>"));
         assert!(xml.contains("<vfs:facet>GROUP</vfs:facet>"));
         assert!(xml.contains("<vfs:facet>TYPE</vfs:facet>"));
+    }
+
+    #[test]
+    fn creates_direct_package_preselections() {
+        for package in ["/DMO/FLIGHT", "ZPACKAGE", "$TMP", "../DMO/FLIGHT"] {
+            let selection = RepositoryPreselection::direct_package(package);
+
+            assert_eq!(selection.facet(), &RepositoryFacet::PACKAGE);
+            assert_eq!(
+                selection.values(),
+                [format!("..{}", package.trim_start_matches(".."))]
+            );
+        }
     }
 
     #[test]
@@ -741,20 +757,38 @@ mod tests {
 
     #[test]
     fn identifies_direct_package_assignment_folders() {
+        let base =
+            AdtUri::parse("/sap/bc/adt/repository/informationsystem/virtualfolders/contents")
+                .unwrap();
+
+        for package in ["/DMO/FLIGHT", "ZPACKAGE", "$TMP"] {
+            let xml = String::from_utf8(CONTENT_XML.to_vec())
+                .unwrap()
+                .replace("name=\"SOURCE_LIBRARY\"", &format!("name=\"..{package}\""))
+                .replace("facet=\"GROUP\"", "facet=\"PACKAGE\"");
+            let content = RepositoryContent::parse(xml.as_bytes(), &base).unwrap();
+
+            assert!(content.folders[0].is_direct_assignment());
+            assert_eq!(
+                content.folders[0].direct_assignment_package(),
+                Some(package)
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_treat_other_facets_as_direct_package_assignments() {
         let xml = String::from_utf8(CONTENT_XML.to_vec())
             .unwrap()
-            .replace("name=\"SOURCE_LIBRARY\"", "name=\"../DMO/FLIGHT\"");
+            .replace("name=\"SOURCE_LIBRARY\"", "name=\"..SOURCE_LIBRARY\"");
         let base =
             AdtUri::parse("/sap/bc/adt/repository/informationsystem/virtualfolders/contents")
                 .unwrap();
 
         let content = RepositoryContent::parse(xml.as_bytes(), &base).unwrap();
 
-        assert!(content.folders[0].is_direct_assignment());
-        assert_eq!(
-            content.folders[0].direct_assignment_package(),
-            Some("/DMO/FLIGHT")
-        );
+        assert!(!content.folders[0].is_direct_assignment());
+        assert_eq!(content.folders[0].direct_assignment_package(), None);
     }
 
     #[test]
@@ -846,7 +880,8 @@ mod tests {
         assert_eq!(properties.object.reference.uri(), &object_uri);
         assert_eq!(properties.object.relations().len(), 1);
         assert_eq!(properties.properties[0].facet, RepositoryFacet::PACKAGE);
-        let package = properties.package().unwrap().unwrap();
+        let package_hierarchy = properties.package_hierarchy().unwrap();
+        let package = &package_hierarchy[0];
         assert_eq!(package.name(), "SADT_TOOLS_CORE");
         assert_eq!(
             package.uri().as_str(),
@@ -855,5 +890,54 @@ mod tests {
         assert_eq!(properties.properties[0].value, "SADT_TOOLS_CORE");
         assert_eq!(properties.properties[0].relations().len(), 1);
         assert_eq!(properties.properties[2].facet.as_str(), "FUTURE");
+    }
+
+    #[test]
+    fn returns_the_complete_package_hierarchy_in_response_order() {
+        let object_uri =
+            AdtUri::parse("/sap/bc/adt/oo/classes/cl_ris_adt_res_obj_properties").unwrap();
+        let properties =
+            RepositoryObjectProperties::parse(OBJECT_PROPERTIES_HIERARCHY_XML, &object_uri)
+                .unwrap();
+
+        let hierarchy = properties.package_hierarchy().unwrap();
+
+        assert_eq!(
+            hierarchy.iter().map(ObjectRef::name).collect::<Vec<_>>(),
+            ["BASIS", "SRIS", "SRIS_ADT"]
+        );
+        assert_eq!(hierarchy[0].uri().as_str(), "/sap/bc/adt/packages/basis");
+        assert_eq!(
+            hierarchy.last().unwrap().uri().as_str(),
+            "/sap/bc/adt/packages/sris_adt"
+        );
+        assert_eq!(
+            properties
+                .properties
+                .iter()
+                .filter(|property| property.facet == RepositoryFacet::APPLICATION_COMPONENT)
+                .map(|property| property.value.as_str())
+                .collect::<Vec<_>>(),
+            ["BC", "BC-DWB", "BC-DWB-AIE"]
+        );
+    }
+
+    #[test]
+    fn package_hierarchy_requires_a_relation_for_every_level() {
+        let xml = String::from_utf8(OBJECT_PROPERTIES_HIERARCHY_XML.to_vec())
+            .unwrap()
+            .replacen(PACKAGE_RELATION, "urn:unexpected", 1);
+        let object_uri =
+            AdtUri::parse("/sap/bc/adt/oo/classes/cl_ris_adt_res_obj_properties").unwrap();
+        let properties = RepositoryObjectProperties::parse(xml.as_bytes(), &object_uri).unwrap();
+
+        let error = properties.package_hierarchy().unwrap_err();
+
+        assert!(matches!(
+            error,
+            ObjectError::MissingRelation {
+                relation: PACKAGE_RELATION
+            }
+        ));
     }
 }

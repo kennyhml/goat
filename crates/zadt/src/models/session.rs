@@ -12,7 +12,6 @@ pub(crate) fn parse_session_information(body: &[u8]) -> Result<SessionInformatio
 
 /// Information advertised for an authenticated ADT HTTP security session.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct SessionInformation {
     /// The resource used to log off the current HTTP security session.
     pub logoff_uri: SessionUri,
@@ -135,7 +134,6 @@ impl fmt::Display for SessionUri {
 
 /// The optional system-information resource advertised during logon.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[readonly::make]
 pub struct SystemInformationLink {
     /// The same-destination system-information target.
     pub target: SessionUri,

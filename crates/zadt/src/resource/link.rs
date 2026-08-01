@@ -18,7 +18,6 @@ const LINK_RESOLUTION_ORIGIN: &str = "https://adt.invalid";
 /// contain query parameters, such as `?version=Active`. All of this
 /// information validated and resolved against the base resource.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-#[readonly::make]
 pub struct AdtLink {
     /// The raw link exactly as advertised by ADT.
     pub href: String,

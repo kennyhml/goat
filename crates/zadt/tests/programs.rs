@@ -574,8 +574,8 @@ async fn program_lock_and_update_share_one_user_session() {
         .execute(&session)
         .await
         .unwrap();
-    assert_eq!(lock_handle.object.uri(), program.uri());
-    assert_eq!(lock_handle.handle, "LOCK-HANDLE-1");
+    assert_eq!(lock_handle.object().uri(), program.uri());
+    assert_eq!(lock_handle.handle(), "LOCK-HANDLE-1");
     program
         .unlock(lock_handle)
         .unwrap()

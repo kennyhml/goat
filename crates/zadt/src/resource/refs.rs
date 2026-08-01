@@ -21,7 +21,6 @@ pub(crate) trait FromAdtLink: Sized {
 /// The marker identifies the relation represented by the reference. Named
 /// aliases such as [`TextElementsRef`] provide the public relation-specific API.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-#[readonly::make]
 pub struct OwnedResourceRef<T> {
     /// The repository object that owns this related resource.
     pub object: ObjectRef,

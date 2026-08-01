@@ -3,9 +3,9 @@ use std::{env, error::Error, io, time::Duration};
 use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
 use zadt::{
-    Client, Logon, Operation, Package, Program, ProgramProperties, RepositoryContentQuery,
-    RepositoryFacet, RepositoryObjectPropertiesQuery, RepositoryPreselection, ReqwestTransport,
-    TransportExt,
+    Client, Logon, Operation, Package, Program, ProgramProperties, RepositoryContent,
+    RepositoryContentQuery, RepositoryFacet, RepositoryObjectPropertiesQuery,
+    RepositoryPreselection, ReqwestTransport, TransportExt,
 };
 
 #[tokio::main]
@@ -35,12 +35,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Logon.execute(&client).await?;
     let client = client.discover().await?;
 
-    let res =
-        RepositoryObjectPropertiesQuery::for_uri(client.object::<Program>("Z_TEST")?.uri().clone())
-            .execute(&client)
-            .await?;
+    let res = RepositoryContentQuery::builder()
+        .preselection(RepositoryPreselection::new(
+            RepositoryFacet::PACKAGE,
+            "$TMP",
+        ))
+        .preselection(RepositoryPreselection::new(
+            RepositoryFacet::OWNER,
+            "DEVELOPER",
+        ))
+        .preselection(RepositoryPreselection::new(
+            RepositoryFacet::GROUP,
+            "SOURCE_LIBRARY",
+        ))
+        .preselection(RepositoryPreselection::new(RepositoryFacet::TYPE, "CLAS").include("PROG"))
+        .build()?
+        .execute(&client)
+        .await?;
 
-    println!("{:?}", res.package());
+    println!("{:#?}", res);
 
     Ok(())
 }

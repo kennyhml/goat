@@ -14,7 +14,6 @@ use crate::{
 
 /// Fetches the source code advertised by a [`SourceRef`].
 #[derive(Debug)]
-#[readonly::make]
 pub struct ObjectSourceQuery {
     /// The source resource to fetch.
     pub source: SourceRef,
@@ -64,10 +63,10 @@ impl<T: ObjectType> ObjectRef<T> {
 
     /// Creates an operation that releases this object's lock.
     pub fn unlock(&self, lock_handle: LockHandle) -> Result<UnlockRequest, ObjectError> {
-        if self.uri() != lock_handle.object.uri() {
+        if self.uri() != lock_handle.object().uri() {
             return Err(ObjectError::LockHandleObjectMismatch {
                 expected: self.to_string(),
-                actual: lock_handle.object.to_string(),
+                actual: lock_handle.object().to_string(),
             });
         }
         Ok(UnlockRequest::new(lock_handle))
@@ -91,7 +90,6 @@ impl<T: Source> ObjectRef<T> {
 /// `accessMode`. The returned [`LockHandle`] must remain in the same user
 /// session as subsequent update or unlock operations.
 #[derive(Debug)]
-#[readonly::make]
 pub struct LockRequest {
     /// The repository object to lock.
     pub object: ObjectRef,
@@ -134,7 +132,6 @@ impl<S: ClientState> Operation<S> for LockRequest {
 
 /// Releases a [`LockHandle`] within its SAP user session.
 #[derive(Debug)]
-#[readonly::make]
 pub struct UnlockRequest {
     /// The lock to release.
     pub lock_handle: LockHandle,
@@ -151,9 +148,9 @@ impl<S: ClientState> Operation<S> for UnlockRequest {
     type Kind = Stateful;
 
     fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
-        let mut request = AdtRequest::new(Method::POST, self.lock_handle.object.uri().clone());
+        let mut request = AdtRequest::new(Method::POST, self.lock_handle.object().uri().clone());
         request.push_query(query_parameter::ACTION, PostAction::Unlock.as_str());
-        request.push_query(query_parameter::LOCK_HANDLE, &self.lock_handle.handle);
+        request.push_query(query_parameter::LOCK_HANDLE, self.lock_handle.handle());
         Ok(request)
     }
 
@@ -172,26 +169,43 @@ impl<S: ClientState> Operation<S> for UnlockRequest {
 /// object being updated. The builder verifies this relationship.
 #[derive(Builder, Debug)]
 #[builder(setter(into), build_fn(validate = Self::validate))]
-#[readonly::make]
 pub struct ObjectSourceUpdate {
     /// The source resource whose complete content will be replaced.
-    pub source: SourceRef,
+    source: SourceRef,
 
     /// A modification lock obtained for the source's owning object.
-    pub lock_handle: LockHandle,
+    lock_handle: LockHandle,
 
     /// The complete replacement source text.
-    pub content: String,
+    content: String,
+}
+
+impl ObjectSourceUpdate {
+    /// Returns the source resource that will be replaced.
+    pub fn source(&self) -> &SourceRef {
+        &self.source
+    }
+
+    /// Returns the lock authorizing this update.
+    pub fn lock_handle(&self) -> &LockHandle {
+        &self.lock_handle
+    }
+
+    /// Returns the complete replacement source text.
+    pub fn content(&self) -> &str {
+        &self.content
+    }
 }
 
 impl ObjectSourceUpdateBuilder {
     fn validate(&self) -> Result<(), String> {
         if let (Some(source), Some(lock_handle)) = (&self.source, &self.lock_handle)
-            && source.object != lock_handle.object
+            && &source.object != lock_handle.object()
         {
             return Err(format!(
                 "lock for `{}` cannot update source `{}`",
-                lock_handle.object, source
+                lock_handle.object(),
+                source
             ));
         }
         Ok(())
@@ -207,7 +221,7 @@ impl<S: ClientState> Operation<S> for ObjectSourceUpdate {
         for (name, value) in &self.source.query {
             request.push_query(name, value);
         }
-        request.push_query(query_parameter::LOCK_HANDLE, &self.lock_handle.handle);
+        request.push_query(query_parameter::LOCK_HANDLE, self.lock_handle.handle());
         request.set_content_type(media_type::SOURCE_UPDATE);
         request.set_body(self.content.clone());
         Ok(request)

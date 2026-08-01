@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opr:objectProperties xmlns:opr="http://www.sap.com/adt/ris/objectProperties">
+    <opr:object name="CL_RIS_ADT_RES_OBJ_PROPERTIES"
+        text="Resource controller for ADT object properties" package="SRIS_ADT"
+        type="CLAS/OC" expandable="true">
+        <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+            href="/sap/bc/adt/oo/classes/cl_ris_adt_res_obj_properties"
+            rel="http://www.sap.com/adt/relations/objects"
+            title="ADT Object Reference"/>
+    </opr:object>
+    <opr:property facet="PACKAGE" name="BASIS" displayName="BASIS"
+        text="BASIS Structure Package" hasChildrenOfSameFacet="true">
+        <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+            href="/sap/bc/adt/packages/basis"
+            rel="http://www.sap.com/adt/relations/packages"
+            type="application/vnd.sap.sapgui" title="ADT Object Reference"/>
+    </opr:property>
+    <opr:property facet="PACKAGE" name="SRIS" displayName="SRIS"
+        text="Repository Information System" hasChildrenOfSameFacet="true">
+        <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+            href="/sap/bc/adt/packages/sris"
+            rel="http://www.sap.com/adt/relations/packages"
+            type="application/vnd.sap.sapgui" title="ADT Object Reference"/>
+    </opr:property>
+    <opr:property facet="PACKAGE" name="SRIS_ADT" displayName="SRIS_ADT"
+        text="Repository Information System: ABAP Development Tools">
+        <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+            href="/sap/bc/adt/packages/sris_adt"
+            rel="http://www.sap.com/adt/relations/packages"
+            type="application/vnd.sap.sapgui" title="ADT Object Reference"/>
+    </opr:property>
+    <opr:property facet="APPL" name="BC" displayName="BC"
+        text="Basis Components" hasChildrenOfSameFacet="true"/>
+    <opr:property facet="APPL" name="BC-DWB" displayName="BC-DWB"
+        text="ABAP Workbench, Java IDE and Infrastructure" hasChildrenOfSameFacet="true"/>
+    <opr:property facet="APPL" name="BC-DWB-AIE" displayName="BC-DWB-AIE"
+        text="Installation and Infrastructure for ABAP Tools in Eclipse"
+        hasChildrenOfSameFacet="true"/>
+</opr:objectProperties>

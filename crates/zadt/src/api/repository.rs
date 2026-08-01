@@ -8,7 +8,11 @@ use crate::{
     target::CollectionTarget, vocabulary::media_type,
 };
 
-/// Selects whether a repository-content query expands or only counts matches.
+/// Kind of repository content operation.
+///
+/// This is passed to the backend as query parameter. If it is omitted, the
+/// default behavior is `Expand`, which also includes the counts. In other
+/// words, `Count` is only useful when no expand is required.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepositoryContentOperation {
     Expand,
@@ -29,23 +33,39 @@ impl RepositoryContentOperation {
 /// RIS does not recursively expand the complete hierarchy. Callers traverse a
 /// tree by adding the returned folder values as preselections in subsequent
 /// queries.
+///
+/// Handler: `CL_RIS_ADT_RES_VIRTUAL_FOLDERS`
 #[derive(Builder, Clone, Debug)]
 #[builder(pattern = "owned", setter(into), default)]
 pub struct RepositoryContentQuery {
+    /// A filter for the object names, expressions like `*` are supported
     search_pattern: String,
 
+    /// A set of search values to match. For example the owner and package.
+    ///
+    /// Note: The special package prefix `..` can be used to request objects
+    /// directly assigned to the package, excluding objects of sub-packages.
     #[builder(setter(each(name = "preselection")))]
     preselections: Vec<RepositoryPreselection>,
 
+    /// The desired facets to return, when left empty, real repository objects are retured.
+    /// Note: Despite accepting a list of facets, only the first one is currently used.
     #[builder(setter(each(name = "facet")))]
     facets: Vec<RepositoryFacet>,
 
+    /// A [`RepositoryContentOperation`], default is [`RepositoryContentOperation::Expand`]
     #[builder(setter(strip_option))]
     operation: Option<RepositoryContentOperation>,
 
+    /// Whether object descriptions should be included, off by default.
     #[builder(setter(strip_option))]
     ignore_short_descriptions: Option<bool>,
 
+    /// Whether a version preselection should be taken into consideration. Must be set
+    /// for the value in the preselection to be used.
+    /// When unspecified in the query, the default behavior is `False`.
+    ///
+    /// **Negatively impacts the performance (+100ms), use only if needed!**
     #[builder(setter(strip_option))]
     with_versions: Option<bool>,
 }
@@ -114,6 +134,13 @@ impl Operation<Ready> for RepositoryContentQuery {
 }
 
 /// Fetches the facets supported by the repository information system.
+///
+/// Fundamental facets that have been part of the API for a long time
+/// are supported statically via [`RepositoryFacet`]. This operation is
+/// more of a way to check compatiblity with the backend system to see
+/// which facets make sense to use.
+///
+/// Handler: `CL_RIS_ADT_RES_VF_FACETS`
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RepositoryFacetsQuery;
 
@@ -143,6 +170,18 @@ impl Operation<Ready> for RepositoryFacetsQuery {
 }
 
 /// Fetches uniform RIS properties for an arbitrary repository object.
+///
+/// The repository object to fetch is represented by its [`AdtUri`]. For example,
+/// `?uri=/sap/bc/adt/programs/programs/ZPROG` returns the properties of the
+/// program `ZPROG`.
+///
+/// These properties are RIS centric and thus only provide generic repository information,
+/// such as facet properties and packages. Notably, the entire package chain is returned,
+/// the order they are returned in defines the hierarchy.
+///
+/// This is the information Eclipse shows in the `Properties` view under `General`.
+///
+/// Handler: `CL_RIS_ADT_RES_OBJ_PROPERTIES`
 #[derive(Builder, Clone, Debug)]
 #[builder(pattern = "owned", setter(into))]
 pub struct RepositoryObjectPropertiesQuery {
