@@ -3,7 +3,9 @@ use std::{env, error::Error, io, time::Duration};
 use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
 use zadt::{
-    Client, Logon, Operation, Package, Program, ProgramProperties, ReqwestTransport, TransportExt,
+    Client, Logon, Operation, Package, Program, ProgramProperties, RepositoryContentQuery,
+    RepositoryFacet, RepositoryObjectPropertiesQuery, RepositoryPreselection, ReqwestTransport,
+    TransportExt,
 };
 
 #[tokio::main]
@@ -33,40 +35,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Logon.execute(&client).await?;
     let client = client.discover().await?;
 
-    let pkg = client.object::<Package>("/DMO/FLIGHT")?;
+    let res =
+        RepositoryObjectPropertiesQuery::for_uri(client.object::<Program>("Z_TEST")?.uri().clone())
+            .execute(&client)
+            .await?;
 
-    let session = client.create_user_session();
-
-    // let lock = pkg.lock(zadt::AccessMode::Modify).execute(&session).await?;
-    //
-    // sleep(Duration::from_secs(10)).await;
-    //
-    // lock.remove().execute(&session).await?;
-
-    let program = client.object::<Program>("z_test")?;
-    let response = program.query().execute(&client).await?;
-    let properties = match response {
-        ProgramProperties::V2(properties) | ProgramProperties::V3(properties) => properties,
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "unsupported program-properties representation",
-            )
-            .into());
-        }
-    };
-
-    let source = properties.source.query().execute(&client).await?;
-
-    println!("program: {}", properties.reference.name());
-    println!("description: {}", properties.description);
-    println!(
-        "package: {} ({})",
-        properties.package.name(),
-        properties.package.uri()
-    );
-    println!("version: {:?}", properties.version);
-    // println!("\n{}", source.content);
+    println!("{:?}", res.package());
 
     Ok(())
 }

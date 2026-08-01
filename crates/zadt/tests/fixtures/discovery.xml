@@ -37,4 +37,26 @@
             </adtcomp:templateLinks>
         </app:collection>
     </app:workspace>
+    <app:workspace>
+        <atom:title>Repository Information</atom:title>
+        <app:collection href="/sap/bc/adt/repository/informationsystem/virtualfolders/contents">
+            <atom:title>Virtual Folders Contents</atom:title>
+            <app:accept>application/vnd.sap.adt.repository.virtualfolders.result.v1+xml</app:accept>
+            <atom:category
+                term="contents"
+                scheme="http://www.sap.com/adt/categories/repository/virtualfolders" />
+        </app:collection>
+        <app:collection href="/sap/bc/adt/repository/informationsystem/virtualfolders/facets">
+            <atom:title>Facets supported by Virtual Folders</atom:title>
+            <atom:category
+                term="facets"
+                scheme="http://www.sap.com/adt/categories/repository/virtualfolders" />
+        </app:collection>
+        <app:collection href="/sap/bc/adt/repository/informationsystem/objectproperties/values">
+            <atom:title>Object Properties</atom:title>
+            <atom:category
+                term="objectProperties"
+                scheme="http://www.sap.com/adt/categories/repository" />
+        </app:collection>
+    </app:workspace>
 </app:service>

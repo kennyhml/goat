@@ -110,6 +110,10 @@ pub(crate) mod media_type {
     pub const HTML: &str = "text/html";
     pub const LOCK_RESULT: &str =
         "application/vnd.sap.as+xml; charset=utf-8; dataname=com.sap.adt.lock.Result2";
+    pub const REPOSITORY_CONTENT_REQUEST: &str =
+        "application/vnd.sap.adt.repository.virtualfolders.request.v1+xml";
+    pub const REPOSITORY_OBJECT_PROPERTIES: &str =
+        "application/vnd.sap.adt.repository.objproperties.result.v1+xml";
     pub const SOURCE: &str = "text/plain";
     pub const SOURCE_UPDATE: &str = "text/plain; charset=utf-8";
 }

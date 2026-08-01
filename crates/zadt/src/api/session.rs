@@ -6,6 +6,7 @@ use crate::{
     AdtRequest, AdtResponse, AdtUri, Client, ClientState, LogonError, NegotiableMediaVersion,
     Operation, OperationError, ResponseError, SessionInformation, Stateless,
     models::parse_session_information,
+    target::HTTP_SESSIONS,
     vocabulary::{
         CANCEL_ON_CLOSE_HEADER, LOAD_BALANCER_HEADER, PURPOSE_HEADER, SECURITY_SESSION_HEADER,
     },
@@ -34,18 +35,12 @@ impl NegotiableMediaVersion for SessionMediaVersion {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Logon;
 
-impl Logon {
-    const HTTP_SESSIONS_URI: &str = "/sap/bc/adt/core/http/sessions";
-}
-
 impl<S: ClientState> Operation<S> for Logon {
     type Response = SessionInformation;
     type Kind = Stateless;
 
     fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
-        let target = AdtUri::parse(Self::HTTP_SESSIONS_URI)
-            .expect("the HTTP sessions target is a valid static ADT URI");
-        let mut request = AdtRequest::new(Method::GET, target);
+        let mut request = HTTP_SESSIONS.request(Method::GET);
         request.push_query("_", cache_buster());
         request.set_accept(SessionMediaVersion::V3.media_type());
 
@@ -65,7 +60,11 @@ impl<S: ClientState> Operation<S> for Logon {
         Ok(request)
     }
 
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+    fn decode(
+        &self,
+        response: AdtResponse,
+        _request_target: &AdtUri,
+    ) -> Result<Self::Response, ResponseError> {
         if response.status() != StatusCode::OK {
             return Err(ResponseError::UnexpectedStatus {
                 status: response.status(),

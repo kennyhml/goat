@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="3">
+    <vfs:preselectionInfo facet="PACKAGE" hasChildrenOfSameFacet="false"/>
+    <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+        href="/sap/bc/adt/repository/informationsystem/virtualfolders?selection=package%3a%24TMP"
+        rel="http://www.sap.com/adt/relations/informationsystem/virtualfolders/selection"
+        title="Virtual Folder Selection"/>
+    <vfs:virtualFolder name="SOURCE_LIBRARY" displayName="Source Code Library" facet="GROUP"
+        counter="2" text="" hasChildrenOfSameFacet="false">
+        <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+            href="/sap/bc/adt/repository/informationsystem/virtualfolders?selection=package%3a%24TMP%20group%3aSOURCE_LIBRARY"
+            rel="http://www.sap.com/adt/relations/informationsystem/virtualfolders/selection"
+            title="Virtual Folder Selection"/>
+    </vfs:virtualFolder>
+    <vfs:object name="ZCL_DEMO" package="$TMP" type="CLAS/OC"
+        uri="/sap/bc/adt/oo/classes/zcl_demo"
+        vituri="/sap/bc/adt/vit/wb/object_type/clasoc/object_name/ZCL_DEMO"
+        expandable="true" text="Demo class">
+        <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+            href="/sap/bc/adt/oo/classes/zcl_demo"
+            rel="http://www.sap.com/adt/relations/objects"
+            title="ADT Object Reference"/>
+    </vfs:object>
+</vfs:virtualFoldersResult>

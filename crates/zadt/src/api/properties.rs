@@ -2,11 +2,12 @@ use http::{Method, StatusCode, header};
 
 use crate::{
     client::{Client, Ready},
-    compatibility::{CompatibilityError, NegotiableMediaVersion},
+    compatibility::NegotiableMediaVersion,
     error::{OperationError, ResponseError},
     objects::{ObjectProperties, ObjectRef, ObjectVersion},
     operation::{IfNoneMatch, Operation, QueryMode, Stateless, Unconditional},
     protocol::{AdtRequest, AdtResponse, EntityTag},
+    target::CollectionTarget,
     vocabulary::query_parameter,
 };
 
@@ -84,9 +85,7 @@ where
     type Kind = Stateless;
 
     fn request(&self, client: &Client<Ready>) -> Result<AdtRequest, OperationError> {
-        let collection = client
-            .collection(T::CATEGORY)
-            .ok_or(CompatibilityError::MissingCollection(T::CATEGORY))?;
+        let collection = CollectionTarget::new(T::CATEGORY).collection(client)?;
         let accept = crate::negotiate(&self.priority, collection.accepted_media_types())?;
 
         let mut request = AdtRequest::new(Method::GET, self.resource.uri().clone());
@@ -98,7 +97,11 @@ where
         Ok(request)
     }
 
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+    fn decode(
+        &self,
+        response: AdtResponse,
+        _request_target: &crate::AdtUri,
+    ) -> Result<Self::Response, ResponseError> {
         if response.status() == StatusCode::NOT_MODIFIED {
             return self
                 .mode

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opr:objectProperties xmlns:opr="http://www.sap.com/adt/ris/objectProperties">
+    <opr:object name="CL_ADT_URI_MAPPER" text="URI Mapper" package="SADT_TOOLS_CORE"
+        type="CLAS/OC" expandable="true">
+        <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+            href="/sap/bc/adt/oo/classes/cl_adt_uri_mapper"
+            rel="http://www.sap.com/adt/relations/objects"
+            title="ADT Object Reference"/>
+    </opr:object>
+    <opr:property facet="PACKAGE" name="SADT_TOOLS_CORE" displayName="SADT_TOOLS_CORE"
+        text="ADT Tools Core" hasChildrenOfSameFacet="false">
+        <atom:link xmlns:atom="http://www.w3.org/2005/Atom"
+            href="/sap/bc/adt/packages/sadt_tools_core"
+            rel="http://www.sap.com/adt/relations/packages"
+            title="ADT Object Reference"/>
+    </opr:property>
+    <opr:property facet="GROUP" name="SOURCE_LIBRARY" displayName="Source Code Library"/>
+    <opr:property facet="FUTURE" name="VALUE" displayName="Future Value"/>
+</opr:objectProperties>

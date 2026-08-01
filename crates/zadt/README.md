@@ -152,8 +152,10 @@ execution capabilities:
 | `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources plus their owning object | Fetched properties such as `ProgramProperties` |
 | `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
 
-Object-type markers provide their statically known category, allowing a
-ready client to construct typed references without type-specific methods:
+Object-type markers describe identity and naming, while `ObjectCollection`
+provides the canonical discovery category only for types that can be resolved
+by name. This allows a ready client to construct typed references without
+type-specific methods:
 
 ```rust,ignore
 let program = client.object::<Program>("ZDEMO")?;

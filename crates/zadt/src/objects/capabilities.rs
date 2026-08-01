@@ -1,9 +1,9 @@
-use super::{ObjectRef, ObjectType};
+use super::{ObjectCollection, ObjectRef, ObjectType};
 use crate::{compatibility::NegotiableMediaVersion, error::ResponseError, protocol::EntityTag};
 
 /// Annotates an object type that supports fetching and decoding properties.
 #[doc(hidden)]
-pub trait ObjectProperties: ObjectType {
+pub trait ObjectProperties: ObjectCollection {
     type MediaVersion: NegotiableMediaVersion;
     type Properties: Send;
 

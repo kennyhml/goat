@@ -1,5 +1,6 @@
 use super::{
-    GlobalWorkbenchType, ObjectNamePolicy, ObjectProperties, ObjectRef, ObjectType, Source, private,
+    GlobalWorkbenchType, ObjectCollection, ObjectNamePolicy, ObjectProperties, ObjectRef,
+    ObjectType, Source, private,
 };
 use crate::{
     error::ResponseError,
@@ -19,12 +20,15 @@ impl private::Sealed for Include {}
 pub enum Package {}
 
 impl ObjectType for Package {
+    const WORKBENCH_TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("DEVC", "K");
+    const NAMING_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
+}
+
+impl ObjectCollection for Package {
     const CATEGORY: CategoryId = CategoryId {
         scheme: "http://www.sap.com/wbobj/packages",
         term: "devck",
     };
-    const WORKBENCH_TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("DEVC", "K");
-    const NAMING_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
 }
 
 // TODO: package object properties
@@ -34,9 +38,12 @@ impl ObjectType for Package {
 pub enum Program {}
 
 impl ObjectType for Program {
-    const CATEGORY: CategoryId = PROGRAMS;
     const WORKBENCH_TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("PROG", "P");
     const NAMING_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
+}
+
+impl ObjectCollection for Program {
+    const CATEGORY: CategoryId = PROGRAMS;
 }
 
 impl Source for Program {}
@@ -60,9 +67,12 @@ impl ObjectProperties for Program {
 pub enum Include {}
 
 impl ObjectType for Include {
-    const CATEGORY: CategoryId = INCLUDES;
     const WORKBENCH_TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("PROG", "I");
     const NAMING_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(40);
+}
+
+impl ObjectCollection for Include {
+    const CATEGORY: CategoryId = INCLUDES;
 }
 
 impl Source for Include {}

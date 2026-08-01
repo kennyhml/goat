@@ -9,6 +9,7 @@ mod objects;
 mod operation;
 mod protocol;
 mod resource;
+mod target;
 mod uri;
 mod vocabulary;
 
@@ -24,24 +25,34 @@ pub use api::programs::{
     ProgramRunBuilderError,
 };
 pub use api::properties::ObjectPropertiesQuery;
+pub use api::repository::{
+    RepositoryContentOperation, RepositoryContentQuery, RepositoryContentQueryBuilder,
+    RepositoryContentQueryBuilderError, RepositoryFacetsQuery, RepositoryObjectPropertiesQuery,
+    RepositoryObjectPropertiesQueryBuilder, RepositoryObjectPropertiesQueryBuilderError,
+};
 pub use api::session::{Logon, SessionMediaVersion};
 pub use client::{Client, ClientState, Initial, Ready};
 pub use compatibility::{CompatibilityError, NegotiableMediaVersion, negotiate};
 #[cfg(feature = "reqwest")]
 pub use error::ReqwestTransportBuildError;
 pub use error::{
-    DiscoveryError, LogonError, ObjectError, OperationError, ResponseError, TransportError,
+    DiscoveryError, LogonError, ObjectError, OperationError, RepositoryError, ResponseError,
+    TransportError,
 };
 pub use models::{
     AccessMode, Capabilities, Category, Collection, IncludeProperties, IncludePropertiesV2,
     IncludePropertyVersion, LockHandle, ProgramProperties, ProgramPropertiesV2,
-    ProgramPropertiesV3, ProgramPropertiesVersion, ProgramRunResult, SessionInformation,
-    SessionUri, SourceCode, SyntaxConfiguration, SyntaxLanguage, SystemInformationLink,
-    TemplateLink, Workspace,
+    ProgramPropertiesV3, ProgramPropertiesVersion, ProgramRunResult, RepositoryContent,
+    RepositoryFacet, RepositoryFacetDefinition, RepositoryFacetValuesLink, RepositoryFacets,
+    RepositoryObjectEntry, RepositoryObjectProperties, RepositoryObjectSummary,
+    RepositoryObjectType, RepositoryPreselection, RepositoryPreselectionInfo, RepositoryProperty,
+    RepositoryVirtualFolder, SessionInformation, SessionUri, SourceCode, SyntaxConfiguration,
+    SyntaxLanguage, SystemInformationLink, TemplateLink, Workspace,
 };
 pub use objects::{
-    GlobalWorkbenchType, Include, InvalidWorkbenchType, ObjectNamePolicy, ObjectProperties,
-    ObjectRef, ObjectType, ObjectVersion, Package, Program, RepositoryObject, Source,
+    GlobalWorkbenchType, Include, InvalidWorkbenchType, ObjectCollection, ObjectNamePolicy,
+    ObjectProperties, ObjectRef, ObjectType, ObjectVersion, Package, Program, RepositoryObject,
+    Source,
 };
 pub use operation::{
     Conditional, Executor, IfNoneMatch, Operation, OperationKind, QueryMode, Stateful, Stateless,

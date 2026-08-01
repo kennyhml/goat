@@ -158,6 +158,24 @@ pub enum ObjectError {
     LockHandleObjectMismatch { expected: String, actual: String },
 }
 
+/// An error encoding or decoding repository information system data.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum RepositoryError {
+    #[error("could not serialize repository information request: {0}")]
+    InvalidRequest(#[source] serde_xml_rs::Error),
+
+    #[error("invalid repository information response: {0}")]
+    InvalidResponse(#[source] serde_xml_rs::Error),
+
+    #[error("repository object `{name}` advertised invalid URI `{uri}`: {source}")]
+    InvalidObjectUri {
+        name: String,
+        uri: String,
+        source: AdtUriError,
+    },
+}
+
 impl From<AdtLinkError> for ObjectError {
     fn from(error: AdtLinkError) -> Self {
         let (href, source) = error.into_parts();
@@ -194,6 +212,9 @@ pub enum ResponseError {
 
     #[error(transparent)]
     Object(#[from] ObjectError),
+
+    #[error(transparent)]
+    Repository(#[from] RepositoryError),
 }
 
 #[derive(Debug, Error)]
@@ -207,6 +228,9 @@ pub enum OperationError {
 
     #[error(transparent)]
     Response(#[from] ResponseError),
+
+    #[error(transparent)]
+    Repository(#[from] RepositoryError),
 }
 
 /// An error produced while carrying a request through a transport.

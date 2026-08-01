@@ -6,7 +6,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::{
     AdtRequest, AdtResponse, Client, ClientState, EntityTag, OperationError, ResponseError,
-    TransportError,
+    TransportError, target::CORE_DISCOVERY,
 };
 
 const ADT_SESSION_TYPE: &str = "x-sap-adt-sessiontype";
@@ -71,7 +71,14 @@ pub trait Operation<S: ClientState>: Send + Sync {
     fn request(&self, client: &Client<S>) -> Result<AdtRequest, OperationError>;
 
     /// Converts the raw transport response into this operation's response type.
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError>;
+    ///
+    /// `request_target` is the target used for the request and can be used to
+    /// resolve relative links in the response.
+    fn decode(
+        &self,
+        response: AdtResponse,
+        request_target: &crate::AdtUri,
+    ) -> Result<Self::Response, ResponseError>;
 
     /// Convenient forward of [`Executor::execute`] to the operation itself
     fn execute<E>(
@@ -145,8 +152,9 @@ where
 {
     async fn execute(&self, operation: &O) -> Result<O::Response, OperationError> {
         let request = operation.request(self)?;
+        let request_target = request.target().clone();
         let response = self.transport().send(request).await?;
-        Ok(operation.decode(response)?)
+        Ok(operation.decode(response, &request_target)?)
     }
 }
 
@@ -159,10 +167,11 @@ where
     async fn execute(&self, operation: &O) -> Result<O::Response, OperationError> {
         let mut session = self.state.lock().await;
         let mut request = operation.request(&self.client)?;
+        let request_target = request.target().clone();
         session.decorate(&mut request)?;
         let response = self.client.transport().send(request).await?;
         session.update(response.headers());
-        Ok(operation.decode(response)?)
+        Ok(operation.decode(response, &request_target)?)
     }
 }
 
@@ -341,9 +350,7 @@ where
         let Some(cookie) = state.cookie_header()? else {
             return Ok(());
         };
-        let target = crate::AdtUri::parse("/sap/bc/adt/core/discovery")
-            .expect("the static core-discovery URI is valid");
-        let mut request = AdtRequest::new(http::Method::GET, target);
+        let mut request = CORE_DISCOVERY.request(http::Method::GET);
         request.headers_mut().insert(
             ADT_SESSION_TYPE,
             HeaderValue::from_static(STATELESS_SESSION_TYPE),
@@ -388,7 +395,11 @@ mod tests {
             ))
         }
 
-        fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+        fn decode(
+            &self,
+            response: AdtResponse,
+            _request_target: &AdtUri,
+        ) -> Result<Self::Response, ResponseError> {
             if response.status() == StatusCode::OK {
                 Ok(())
             } else {

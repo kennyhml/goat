@@ -157,7 +157,7 @@ impl ReqwestTransport {
     async fn fetch_csrf_token(&self) -> Result<HeaderValue, TransportError> {
         let url = self
             .destination
-            .join("/sap/bc/adt/core/discovery")
+            .join(crate::target::CORE_DISCOVERY.as_str())
             .map_err(TransportError::new)?;
         let mut headers = HeaderMap::new();
         headers.insert(CSRF_TOKEN_HEADER, HeaderValue::from_static(CSRF_FETCH));

@@ -2,7 +2,9 @@ use http::{Method, StatusCode};
 
 use crate::{
     AdtRequest, AdtResponse, AdtUri, Capabilities, Client, ClientState, Initial, Operation,
-    OperationError, Ready, ResponseError, Stateless, models::parse_capabilities,
+    OperationError, Ready, ResponseError, Stateless,
+    models::parse_capabilities,
+    target::{CENTRAL_DISCOVERY, CORE_DISCOVERY},
     vocabulary::media_type,
 };
 
@@ -31,14 +33,16 @@ impl<S: ClientState> Operation<S> for CoreDiscoveryQuery {
     type Kind = Stateless;
 
     fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
-        let target = AdtUri::parse("/sap/bc/adt/core/discovery")
-            .expect("the core discovery target is a valid static ADT URI");
-        let mut request = AdtRequest::new(Method::GET, target);
+        let mut request = CORE_DISCOVERY.request(Method::GET);
         request.set_accept(media_type::DISCOVERY);
         Ok(request)
     }
 
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+    fn decode(
+        &self,
+        response: AdtResponse,
+        _request_target: &AdtUri,
+    ) -> Result<Self::Response, ResponseError> {
         decode_discovery_response(response)
     }
 }
@@ -68,14 +72,16 @@ impl<S: ClientState> Operation<S> for DiscoveryQuery {
     type Kind = Stateless;
 
     fn request(&self, _client: &Client<S>) -> Result<AdtRequest, OperationError> {
-        let target = AdtUri::parse("/sap/bc/adt/discovery")
-            .expect("the central discovery target is a valid static ADT URI");
-        let mut request = AdtRequest::new(Method::GET, target);
+        let mut request = CENTRAL_DISCOVERY.request(Method::GET);
         request.set_accept(media_type::DISCOVERY);
         Ok(request)
     }
 
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+    fn decode(
+        &self,
+        response: AdtResponse,
+        _request_target: &AdtUri,
+    ) -> Result<Self::Response, ResponseError> {
         decode_discovery_response(response)
     }
 }

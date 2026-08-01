@@ -55,4 +55,12 @@ impl Relations {
             })
             .transpose()
     }
+
+    pub(crate) fn find(&self, relation: &str) -> Result<Option<AdtLink>, AdtLinkError> {
+        self.links
+            .iter()
+            .find(|link| link.relation.as_deref() == Some(relation))
+            .map(|link| link.resolve(self.owner.uri()))
+            .transpose()
+    }
 }

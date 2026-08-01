@@ -35,11 +35,12 @@ The generic layer should own:
 - `QueryMode`, `Conditional<T>`, and `200`/`304` handling.
 - HTTP ETag extraction.
 
-Each sealed object-type profile should provide:
+The protocol metadata is split across focused sealed profiles:
 
-- Its discovery `CategoryId`.
-- Its associated media-version and properties types.
-- A parser from the negotiated response body into those properties.
+- `ObjectType` provides Workbench identity and naming constraints.
+- `ObjectCollection` provides the canonical discovery `CategoryId`.
+- `ObjectProperties` provides media-version and properties types plus the
+  representation parser.
 
 The generic query handles missing or unsupported response `Content-Type` values,
 then passes the typed resource, negotiated media version, body, and ETag to the
@@ -54,7 +55,7 @@ not interchangeable.
 The sealed object-properties profile has this shape:
 
 ```rust
-pub trait ObjectProperties: ObjectType {
+pub trait ObjectProperties: ObjectCollection {
     type MediaVersion: NegotiableMediaVersion;
     type Properties: Send;
 

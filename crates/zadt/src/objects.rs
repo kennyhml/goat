@@ -3,7 +3,6 @@ use std::{any::Any, fmt, hash::Hash, marker::PhantomData};
 use crate::{
     AccessMode, LockHandle, LockRequest, UnlockRequest,
     client::{Client, Ready},
-    compatibility::CompatibilityError,
     error::ObjectError,
     uri::AdtUri,
     vocabulary::CategoryId,
@@ -27,19 +26,20 @@ pub(crate) mod private {
 
 /// Statically identified ADT object resource family.
 ///
-/// This allows object types to automatically implement various traits
-/// and enables the objects capabilities to be located dynamically by
-/// following the category in the discovery.
+/// This allows object types to automatically implement various traits while
+/// keeping their protocol location separate in [`ObjectCollection`].
 pub trait ObjectType: private::Sealed + Send + Sync + Sized + 'static {
-    /// The `atom:category` to identify the objects profile in a collection
-    /// advertised through discovery, see
-    const CATEGORY: CategoryId;
-
     /// The objects global Workbench type.
     const WORKBENCH_TYPE: GlobalWorkbenchType;
 
     /// The objects naming constraints.
     const NAMING_POLICY: ObjectNamePolicy;
+}
+
+/// An object type whose canonical collection is advertised through discovery.
+pub trait ObjectCollection: ObjectType {
+    /// The stable category identifying the canonical object collection.
+    const CATEGORY: CategoryId;
 }
 
 /// Type erased operations and metadata shared by repository objects.
@@ -58,9 +58,6 @@ pub trait ObjectType: private::Sealed + Send + Sync + Sized + 'static {
 /// only make a guarantee about very few operations, such as lifecycles, that
 /// all objects support.
 pub trait RepositoryObject: Any + Send + Sync {
-    /// Returns the discovery category for this object type.
-    fn category(&self) -> CategoryId;
-
     /// Returns the naming constraints for this object type.
     fn naming_policy(&self) -> ObjectNamePolicy;
 
@@ -78,10 +75,6 @@ impl<T> RepositoryObject for ObjectRef<T>
 where
     T: ObjectType,
 {
-    fn category(&self) -> CategoryId {
-        T::CATEGORY
-    }
-
     fn naming_policy(&self) -> ObjectNamePolicy {
         T::NAMING_POLICY
     }
@@ -110,7 +103,8 @@ impl dyn RepositoryObject + '_ {
 /// A validated ADT object identity, optionally tagged with its static object type.
 ///
 /// A bare `ObjectRef` is type-erased and proves only the objects identity and
-/// location. [`Client::object`] returns `ObjectRef<T>` for a known [`ObjectType`].
+/// location. [`Client::object`] returns `ObjectRef<T>` for a known
+/// [`ObjectCollection`].
 pub struct ObjectRef<T = ()> {
     name: String,
     uri: AdtUri,
@@ -199,13 +193,11 @@ impl Client<Ready> {
     ///
     /// Constructing a reference performs no request; the collection URI comes
     /// from the capabilities already retained by the ready client.
-    pub fn object<T: ObjectType>(&self, name: &str) -> Result<ObjectRef<T>, ObjectError> {
+    pub fn object<T: ObjectCollection>(&self, name: &str) -> Result<ObjectRef<T>, ObjectError> {
         T::NAMING_POLICY.validate(name)?;
         let name = name.to_ascii_uppercase();
         let uri_name = name.to_ascii_lowercase();
-        let collection = self
-            .collection(T::CATEGORY)
-            .ok_or(CompatibilityError::MissingCollection(T::CATEGORY))?;
+        let collection = self.require_collection(T::CATEGORY)?;
         let uri = collection.target().append_segments([&uri_name])?;
         Ok(ObjectRef::typed(name, uri))
     }

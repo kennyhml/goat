@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{Capabilities, CategoryId, Collection, Transport, UserSession};
+use crate::{Capabilities, CategoryId, Collection, CompatibilityError, Transport, UserSession};
 
 mod private {
     pub trait Sealed {}
@@ -78,6 +78,14 @@ impl Client<Ready> {
     pub fn collection(&self, category: CategoryId) -> Option<&Collection> {
         self.capabilities()
             .collection(category.scheme, category.term)
+    }
+
+    pub(crate) fn require_collection(
+        &self,
+        category: CategoryId,
+    ) -> Result<&Collection, CompatibilityError> {
+        self.collection(category)
+            .ok_or(CompatibilityError::MissingCollection(category))
     }
 }
 

@@ -33,7 +33,11 @@ impl<S: ClientState> Operation<S> for ObjectSourceQuery {
         Ok(request)
     }
 
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+    fn decode(
+        &self,
+        response: AdtResponse,
+        _request_target: &crate::AdtUri,
+    ) -> Result<Self::Response, ResponseError> {
         expect_ok(&response)?;
         let etag = response.entity_tag();
         let content = String::from_utf8(response.into_body())
@@ -117,7 +121,11 @@ impl<S: ClientState> Operation<S> for LockRequest {
         Ok(request)
     }
 
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+    fn decode(
+        &self,
+        response: AdtResponse,
+        _request_target: &crate::AdtUri,
+    ) -> Result<Self::Response, ResponseError> {
         expect_ok(&response)?;
         let handle = parse_lock_handle(response.body())?;
         Ok(LockHandle::new(self.object.clone(), handle))
@@ -149,7 +157,11 @@ impl<S: ClientState> Operation<S> for UnlockRequest {
         Ok(request)
     }
 
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+    fn decode(
+        &self,
+        response: AdtResponse,
+        _request_target: &crate::AdtUri,
+    ) -> Result<Self::Response, ResponseError> {
         expect_ok(&response)
     }
 }
@@ -201,7 +213,11 @@ impl<S: ClientState> Operation<S> for ObjectSourceUpdate {
         Ok(request)
     }
 
-    fn decode(&self, response: AdtResponse) -> Result<Self::Response, ResponseError> {
+    fn decode(
+        &self,
+        response: AdtResponse,
+        _request_target: &crate::AdtUri,
+    ) -> Result<Self::Response, ResponseError> {
         expect_ok(&response)
     }
 }

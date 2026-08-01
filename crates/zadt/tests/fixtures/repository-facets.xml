@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vf:facets xmlns:vf="http://www.sap.com/adt/ris/facets">
+    <vf:facet key="appl" displayName="Application Component"
+        description="The application component of the development object."
+        isHierarchical="true" isForFiltering="true" isForStructuring="true">
+        <adtcomp:templateLink xmlns:adtcomp="http://www.sap.com/adt/compatibility"
+            title="Application Components"
+            rel="http://www.sap.com/adt/relations/informationsystem/propertyvalues"
+            template="/sap/bc/adt/repository/informationsystem/properties/values?data=appl{&amp;name}"
+            type="application/vnd.sap.adt.nameditems.v1+xml"/>
+    </vf:facet>
+    <vf:facet key="package" displayName="Package"
+        description="The package to which the development object is assigned."
+        isHierarchical="true" isForFiltering="true" isForStructuring="true"/>
+</vf:facets>
