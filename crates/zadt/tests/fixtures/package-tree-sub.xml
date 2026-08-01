@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<pak:packageTree pak:isSuperTree="false" xmlns:pak="http://www.sap.com/adt/packages">
+    <pak:treeNode
+        adtcore:uri="/sap/bc/adt/packages/SADT_TOOLS_CORE"
+        adtcore:type="DEVCK"
+        adtcore:name="SADT_TOOLS_CORE"
+        adtcore:description="ADT Tools Core"
+        pak:isEncapsulated="true"
+        pak:hasSubpackages="false"
+        pak:hasInterfaces="true"
+        xmlns:adtcore="http://www.sap.com/adt/core">
+        <pak:superPackageRef
+            adtcore:uri="/sap/bc/adt/packages/SADT_MAIN"
+            adtcore:type="DEVCK"
+            adtcore:name="SADT_MAIN" />
+        <pak:packageInterfaces>
+            <pak:packageInterfaceRef
+                adtcore:uri="/sap/bc/adt/vit/wb/object_type/pinfki/object_name/SADT_TOOLS_CORE_PUBLIC"
+                adtcore:type="PINFKI"
+                adtcore:name="SADT_TOOLS_CORE_PUBLIC"
+                adtcore:description="Public package interface" />
+        </pak:packageInterfaces>
+    </pak:treeNode>
+</pak:packageTree>

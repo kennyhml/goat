@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<pkcs:settings
+    pkcs:showPackageCheckErrors="false"
+    xmlns:pkcs="http://www.sap.com/adt/packages/settings" />

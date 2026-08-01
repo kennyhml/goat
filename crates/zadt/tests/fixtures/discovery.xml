@@ -38,6 +38,31 @@
         </app:collection>
     </app:workspace>
     <app:workspace>
+        <atom:title>Packages</atom:title>
+        <app:collection href="/sap/bc/adt/packages">
+            <atom:title>Package</atom:title>
+            <app:accept>application/vnd.sap.adt.packages.v2+xml</app:accept>
+            <app:accept>application/vnd.sap.adt.packages.v1+xml</app:accept>
+            <atom:category
+                term="devck"
+                scheme="http://www.sap.com/wbobj/packages" />
+            <adtcomp:templateLinks xmlns:adtcomp="http://www.sap.com/adt/compatibility">
+                <adtcomp:templateLink
+                    rel="http://www.sap.com/wbobj/packages/devck/properties"
+                    template="/sap/bc/adt/packages/{object_name}{?corrNr,lockHandle,version,accessMode,_action}" />
+                <adtcomp:templateLink
+                    rel="tree"
+                    template="/sap/bc/adt/packages/$tree{?packagename,type}" />
+            </adtcomp:templateLinks>
+        </app:collection>
+        <app:collection href="/sap/bc/adt/packages/settings">
+            <atom:title>Package Settings</atom:title>
+            <atom:category
+                term="settings"
+                scheme="http://www.sap.com/wbobj/packages" />
+        </app:collection>
+    </app:workspace>
+    <app:workspace>
         <atom:title>Repository Information</atom:title>
         <app:collection href="/sap/bc/adt/repository/informationsystem/virtualfolders/contents">
             <atom:title>Virtual Folders Contents</atom:title>

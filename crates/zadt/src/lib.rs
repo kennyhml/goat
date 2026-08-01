@@ -20,6 +20,7 @@ pub use api::object::{
     LockRequest, ObjectSourceQuery, ObjectSourceUpdate, ObjectSourceUpdateBuilder,
     ObjectSourceUpdateBuilderError, UnlockRequest,
 };
+pub use api::packages::{PackagePropertiesQuery, PackageSettingsQuery, PackageTreeQuery};
 pub use api::programs::{
     IncludePropertiesQuery, ProgramPropertiesQuery, ProgramRun, ProgramRunBuilder,
     ProgramRunBuilderError,
@@ -41,7 +42,10 @@ pub use error::{
 };
 pub use models::{
     AccessMode, Capabilities, Category, Collection, IncludeProperties, IncludePropertiesV2,
-    IncludePropertyVersion, LockHandle, ProgramProperties, ProgramPropertiesV2,
+    IncludePropertyVersion, LockHandle, PackageAssignment, PackageAttributes,
+    PackageInterfaceReference, PackageProperties, PackagePropertiesV1, PackagePropertiesV2,
+    PackagePropertiesVersion, PackageReference, PackageSettings, PackageTransport, PackageTree,
+    PackageTreeKind, PackageTreeNode, PackageUseAccess, ProgramProperties, ProgramPropertiesV2,
     ProgramPropertiesV3, ProgramPropertiesVersion, ProgramRunResult, RepositoryContent,
     RepositoryFacet, RepositoryFacetDefinition, RepositoryFacetValuesLink, RepositoryFacets,
     RepositoryObjectEntry, RepositoryObjectProperties, RepositoryObjectSummary,

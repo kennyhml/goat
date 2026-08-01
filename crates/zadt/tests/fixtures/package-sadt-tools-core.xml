@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<pak:package
+    adtcore:responsible="SAP"
+    adtcore:masterLanguage="EN"
+    adtcore:masterSystem="SAP"
+    adtcore:name="SADT_TOOLS_CORE"
+    adtcore:type="DEVC/K"
+    adtcore:changedAt="2020-12-02T00:00:00Z"
+    adtcore:version="active"
+    adtcore:createdAt="2009-11-23T00:00:00Z"
+    adtcore:changedBy="SAP"
+    adtcore:createdBy="SAP"
+    adtcore:description="ADT Tools Core"
+    adtcore:descriptionTextLimit="60"
+    adtcore:language="EN"
+    xmlns:pak="http://www.sap.com/adt/packages"
+    xmlns:adtcore="http://www.sap.com/adt/core">
+    <atom:link
+        href="versions"
+        rel="http://www.sap.com/adt/relations/versions"
+        title="Historic versions"
+        xmlns:atom="http://www.w3.org/2005/Atom" />
+    <pak:attributes
+        pak:packageType="development"
+        pak:isPackageTypeEditable="true"
+        pak:isAddingObjectsAllowed="false"
+        pak:isAddingObjectsAllowedEditable="true"
+        pak:isEncapsulated="true"
+        pak:isEncapsulationEditable="true"
+        pak:isEncapsulationVisible="true"
+        pak:recordChanges="true"
+        pak:isRecordChangesEditable="false"
+        pak:isSwitchVisible="false"
+        pak:languageVersion=""
+        pak:isLanguageVersionVisible="true"
+        pak:isLanguageVersionEditable="true" />
+    <pak:superPackage
+        adtcore:uri="/sap/bc/adt/packages/sadt_main"
+        adtcore:type="DEVC/K"
+        adtcore:name="SADT_MAIN"
+        adtcore:description="ABAP Development Tools" />
+    <pak:applicationComponent
+        pak:name="BC-DWB-AIE"
+        pak:description="Installation and Infrastructure for ABAP Tools in Eclipse"
+        pak:isVisible="true"
+        pak:isEditable="true" />
+    <pak:transport>
+        <pak:softwareComponent
+            pak:name="SAP_BASIS"
+            pak:description="SAP Basis Component"
+            pak:isVisible="true"
+            pak:isEditable="true" />
+        <pak:transportLayer
+            pak:name="SAP"
+            pak:description="Transport Layer for SAP Standard Objects"
+            pak:isVisible="true"
+            pak:isEditable="true" />
+    </pak:transport>
+    <pak:useAccesses pak:isVisible="true">
+        <pak:useAccess pak:severity="none">
+            <pak:packageInterfaceRef
+                adtcore:uri="/sap/bc/adt/vit/wb/object_type/pinfki/object_name/SADT_CORE_PUBLIC"
+                adtcore:type="PINF/KI"
+                adtcore:name="SADT_CORE_PUBLIC" />
+            <pak:packageRef
+                adtcore:uri="/sap/bc/adt/packages/sadt_core"
+                adtcore:type="DEVC/K"
+                adtcore:name="SADT_CORE" />
+        </pak:useAccess>
+    </pak:useAccesses>
+    <pak:packageInterfaces pak:isVisible="true">
+        <pak:packageInterfaceRef
+            adtcore:uri="/sap/bc/adt/vit/wb/object_type/pinfki/object_name/SADT_TOOLS_CORE_PUBLIC"
+            adtcore:type="PINF/KI"
+            adtcore:name="SADT_TOOLS_CORE_PUBLIC"
+            adtcore:description="Public package interface" />
+    </pak:packageInterfaces>
+    <pak:subPackages>
+        <pak:packageRef
+            adtcore:uri="/sap/bc/adt/packages/sadt_tools_core_test"
+            adtcore:type="DEVC/K"
+            adtcore:name="SADT_TOOLS_CORE_TEST"
+            adtcore:description="Test helpers" />
+    </pak:subPackages>
+</pak:package>

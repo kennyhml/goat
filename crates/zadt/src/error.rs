@@ -133,6 +133,15 @@ pub enum ObjectError {
         actual: GlobalWorkbenchType,
     },
 
+    #[error("expected compact object type `{expected}`, but the response advertised `{actual}`")]
+    UnexpectedCompactObjectType {
+        expected: &'static str,
+        actual: String,
+    },
+
+    #[error("object reference is missing required field `{field}`")]
+    IncompleteObjectReference { field: &'static str },
+
     #[error("the `{relation}` operation template was not advertised")]
     MissingTemplate { relation: &'static str },
 

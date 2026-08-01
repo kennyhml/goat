@@ -5,7 +5,8 @@ use super::{
 use crate::{
     error::ResponseError,
     models::{
-        IncludeProperties, IncludePropertyVersion, ProgramProperties, ProgramPropertiesVersion,
+        IncludeProperties, IncludePropertyVersion, PackageProperties, PackagePropertiesVersion,
+        ProgramProperties, ProgramPropertiesVersion,
     },
     protocol::EntityTag,
     vocabulary::{CategoryId, INCLUDES, PROGRAMS},
@@ -31,7 +32,19 @@ impl ObjectCollection for Package {
     };
 }
 
-// TODO: package object properties
+impl ObjectProperties for Package {
+    type MediaVersion = PackagePropertiesVersion;
+    type Properties = PackageProperties;
+
+    fn parse(
+        resource: &ObjectRef<Self>,
+        version: Self::MediaVersion,
+        body: Vec<u8>,
+        etag: Option<EntityTag>,
+    ) -> Result<Self::Properties, ResponseError> {
+        PackageProperties::parse(resource, version, &body, etag)
+    }
+}
 
 /// The ABAP program object type.
 #[derive(Debug)]
@@ -92,6 +105,13 @@ impl ObjectProperties for Include {
 }
 
 impl ObjectRef<Program> {
+    #[cfg(test)]
+    pub(crate) fn for_test(name: &str, uri: crate::AdtUri) -> Self {
+        Self::typed(name.to_ascii_uppercase(), uri)
+    }
+}
+
+impl ObjectRef<Package> {
     #[cfg(test)]
     pub(crate) fn for_test(name: &str, uri: crate::AdtUri) -> Self {
         Self::typed(name.to_ascii_uppercase(), uri)
