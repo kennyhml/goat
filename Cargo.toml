@@ -11,5 +11,5 @@ edition = "2024"
 dotenvy = "0.15"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zadt = { path = "./crates/zadt/" }
+zadt = { path = "./crates/zadt/", features = ["logging"] }
 zvfs = { path = "./crates/zvfs/" }

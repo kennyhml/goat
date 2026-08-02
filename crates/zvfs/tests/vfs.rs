@@ -442,7 +442,7 @@ async fn traverses_packages_groups_types_and_objects() {
 }
 
 #[tokio::test]
-async fn child_packages_inherit_their_mounts_facet_policy() {
+async fn child_package_metadata_controls_hierarchy_queries() {
     let (client, state) = client(Behavior::Tree).await;
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(Mount::package("/ROOT").facet_policy(FacetPolicy::grouped([RepositoryFacet::OWNER])))
@@ -463,17 +463,35 @@ async fn child_packages_inherit_their_mounts_facet_policy() {
             .collect::<Vec<_>>(),
         ["DEVELOPER"]
     );
+    {
+        let requests = state.requests.lock().unwrap();
+        let root_direct = requests
+            .iter()
+            .find(|request| request.contains("<vfs:value>../ROOT</vfs:value>"))
+            .unwrap();
+        assert_output_facet(root_direct, Some("OWNER"));
+        let child_direct = requests
+            .iter()
+            .find(|request| request.contains("<vfs:value>../ROOT/CHILD</vfs:value>"))
+            .unwrap();
+        assert_output_facet(child_direct, Some("OWNER"));
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.contains("<vfs:value>/ROOT/CHILD</vfs:value>"))
+        );
+    }
+
+    vfs.refresh(child_package.id).await.unwrap();
+
     let requests = state.requests.lock().unwrap();
-    let root_direct = requests
-        .iter()
-        .find(|request| request.contains("<vfs:value>../ROOT</vfs:value>"))
-        .unwrap();
-    assert_output_facet(root_direct, Some("OWNER"));
-    let child_direct = requests
-        .iter()
-        .find(|request| request.contains("<vfs:value>../ROOT/CHILD</vfs:value>"))
-        .unwrap();
-    assert_output_facet(child_direct, Some("OWNER"));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.contains("<vfs:value>/ROOT/CHILD</vfs:value>"))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

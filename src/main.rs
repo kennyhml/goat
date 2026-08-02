@@ -3,11 +3,11 @@ use std::{env, error::Error, io, time::Duration};
 use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
 use zadt::{
-    Client, Logon, Operation, Package, Program, ProgramProperties, RepositoryContent,
-    RepositoryContentQuery, RepositoryFacet, RepositoryObjectPropertiesQuery,
+    Client, Logon, Operation, Package, PackageSettingsQuery, Program, ProgramProperties,
+    RepositoryContent, RepositoryContentQuery, RepositoryFacet, RepositoryObjectPropertiesQuery,
     RepositoryPreselection, ReqwestTransport, TransportExt,
 };
-use zvfs::{FacetLevel, FacetPolicy, Mount, VirtualFileSystem};
+use zvfs::{FacetLevel, FacetPolicy, Mount, VirtualRepositoryTree};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -31,33 +31,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .language(language)
         .basic_auth(username, password)
         .build()?
-        .traced();
+        .traced()
+        .with_body_logging(64 * 1024);
     let client = Client::new(transport).discover().await?;
 
-    let preselections = vec![
-        RepositoryPreselection::new(RepositoryFacet::PACKAGE, "$TMP"),
-        RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER").include("DDIC"),
-    ];
+    let package = client.object::<Package>("$TMP")?;
+    let tree = package.sub_tree().execute(&client).await?;
 
-    let vfs = VirtualFileSystem::builder(client.clone())
-        .mount(
-            Mount::selection("Local Objects", preselections).facet_policy(FacetPolicy::new([
-                FacetLevel::always(RepositoryFacet::OWNER),
-                FacetLevel::always(RepositoryFacet::GROUP),
-                FacetLevel::adaptive(RepositoryFacet::TYPE, 2),
-            ])),
-        )
-        .build();
+    for node in tree.nodes {
+        println!(
+            "{}: children={}, interfaces={}",
+            node.package.reference.name(),
+            node.has_subpackages,
+            node.has_interfaces,
+        );
+    }
 
-    let res = vfs.children(vfs.root()).await.unwrap();
-
-    let mount_children = vfs.children(res[0].id).await.unwrap();
-    // for i in 0..mount_children.len() {
-    let dev = vfs.children(mount_children[1].id).await?;
-
-    vfs.children(dev[2].id).await?;
-    // }
-    println!("{}", vfs.render_tree());
+    // let properties = package.query().execute(&client).await?;
+    // let ancestors = package.super_tree().execute(&client).await?;
+    // let children = package.sub_tree().execute(&client).await?;
+    // let settings = PackageSettingsQuery.execute(&client).await?;
+    // println!("{:#?}", properties);
 
     Ok(())
 }

@@ -281,10 +281,11 @@ impl ExpansionContext {
 
     /// Creates a new [`Expansion`] for this context where the given package
     /// is used to expand upon. The expansion policy is shared.
-    fn child_package(&self, package: String) -> Expansion {
+    fn child_package(&self, package: String, has_child_packages: bool) -> Expansion {
         Expansion::Package {
             package,
             context: self.clone(),
+            has_child_packages,
         }
     }
 
@@ -339,6 +340,7 @@ enum Expansion {
     Package {
         package: String,
         context: ExpansionContext,
+        has_child_packages: bool,
     },
     /// An arbitrary caller-provided RIS selection.
     Selection { context: ExpansionContext },
@@ -369,14 +371,13 @@ impl PreparedNode {
                 package: folder.name.clone(),
                 object_count: Some(folder.object_count),
             },
-            expansion: context.child_package(folder.name),
+            expansion: context.child_package(folder.name, folder.has_children_of_same_facet),
             object: None,
         }
     }
 
     fn tree_order(&self, other: &Self) -> Ordering {
-        self.kind_order(&other)
-            .then_with(|| self.label_order(&other))
+        self.kind_order(other).then_with(|| self.label_order(other))
     }
 
     fn kind_order(&self, other: &Self) -> Ordering {
@@ -420,6 +421,8 @@ impl From<Mount> for PreparedNode {
                 expansion: Expansion::Package {
                     package,
                     context: ExpansionContext::new(facet_policy, Vec::new()),
+                    // Explicit mounts have no folder metadata, so probe conservatively.
+                    has_child_packages: true,
                 },
                 object: None,
             },
@@ -835,13 +838,19 @@ impl VirtualRepositoryTree {
                     has_children_of_same_facet: None,
                 })
             }
-            Expansion::Package { package, context } => Ok(Loaded {
-                prepared: self.load_package(package, context).await?,
+            Expansion::Package {
+                package,
+                context,
+                has_child_packages,
+            } => Ok(Loaded {
+                prepared: self
+                    .load_package(package, context, refresh || has_child_packages)
+                    .await?,
                 object_count: None,
                 has_children_of_same_facet: None,
             }),
             Expansion::Selection { context } => {
-                let layer = self.load_object_layer(context, 0).await?;
+                let layer = self.load_next_content_layer(context, 0).await?;
                 Ok(Loaded {
                     prepared: layer.nodes,
                     object_count: None,
@@ -857,12 +866,13 @@ impl VirtualRepositoryTree {
                 if refresh {
                     return self.refresh_facet(context, facet_index).await;
                 }
+                // Hierarchical facets repeat until RIS marks the selected folder as a leaf.
                 let next_facet = if has_children_of_same_facet {
                     facet_index
                 } else {
                     facet_index + 1
                 };
-                let layer = self.load_object_layer(context, next_facet).await?;
+                let layer = self.load_next_content_layer(context, next_facet).await?;
                 Ok(Loaded {
                     prepared: layer.nodes,
                     object_count: Some(layer.object_count),
@@ -880,7 +890,9 @@ impl VirtualRepositoryTree {
         facet_index: usize,
     ) -> Result<Loaded, VfsError> {
         let Some(level) = context.facet_policy().levels().get(facet_index).cloned() else {
-            let layer = self.load_object_layer(context, facet_index + 1).await?;
+            let layer = self
+                .load_next_content_layer(context, facet_index + 1)
+                .await?;
             return Ok(Loaded {
                 prepared: layer.nodes,
                 object_count: Some(layer.object_count),
@@ -902,7 +914,7 @@ impl VirtualRepositoryTree {
             let specs = if level.retains(object_count) {
                 LoadedLayer::from_folders(same_facet, context, facet_index).nodes
             } else {
-                self.load_object_layer(context, facet_index + 1)
+                self.load_next_content_layer(context, facet_index + 1)
                     .await?
                     .nodes
             };
@@ -913,7 +925,9 @@ impl VirtualRepositoryTree {
             });
         }
 
-        let layer = self.load_object_layer(context, facet_index + 1).await?;
+        let layer = self
+            .load_next_content_layer(context, facet_index + 1)
+            .await?;
         Ok(Loaded {
             prepared: layer.nodes,
             object_count: Some(layer.object_count),
@@ -921,22 +935,40 @@ impl VirtualRepositoryTree {
         })
     }
 
-    /// Loads child packages and directly assigned content concurrently.
+    /// Loads directly assigned content and, when needed, child packages.
+    ///
+    /// ## Background
+    ///
+    /// In RIS, a query with the preselection `PACKAGE=/DMO/FLIGHT` and the desired
+    /// facet, e.g. `GROUP`, returns contents of **all** sub-packages.
+    ///
+    /// In other words, you will get a number of groups even if the package `/DMO/FLIGHT`
+    /// only consists of sub-packages. For this reason, the facet `PACKAGE=../DMO/FLIGHT`
+    /// must be used, which is a special notation to request directly assigned objects.
+    ///
+    /// When child packages may exist, this method dispatches both requests concurrently.
+    ///
+    /// TODO: Ideally this should be done with a batch request once ADT supports it
     async fn load_package(
         &self,
         package: String,
         context: ExpansionContext,
+        load_child_packages: bool,
     ) -> Result<Vec<PreparedNode>, VfsError> {
+        let direct_context =
+            context.with_preselection(RepositoryPreselection::direct_package(package.clone()));
+        if !load_child_packages {
+            return Ok(self.load_next_content_layer(direct_context, 0).await?.nodes);
+        }
+
         let mut child_selection = context.preselections().to_vec();
         child_selection.push(RepositoryPreselection::new(
             RepositoryFacet::PACKAGE,
             package.clone(),
         ));
-        let direct_context =
-            context.with_preselection(RepositoryPreselection::direct_package(package.clone()));
 
         let child_packages = self.query_content(&child_selection, Some(RepositoryFacet::PACKAGE));
-        let direct_objects = self.load_object_layer(direct_context, 0);
+        let direct_objects = self.load_next_content_layer(direct_context, 0);
         let (mut child_packages, direct_objects) = try_join(child_packages, direct_objects).await?;
         // RIS echoes the selected package in its own expansion.
         child_packages
@@ -952,13 +984,14 @@ impl VirtualRepositoryTree {
     /// Applies the next configured facet, or returns objects when the chain ends.
     ///
     /// Adaptive levels below their threshold are skipped independently.
-    async fn load_object_layer(
+    async fn load_next_content_layer(
         &self,
         context: ExpansionContext,
         mut next_facet: usize,
     ) -> Result<LoadedLayer, VfsError> {
         loop {
             let Some(level) = context.facet_policy().levels().get(next_facet).cloned() else {
+                // No more facets left, just get the objects
                 let content = self.query_content(context.preselections(), None).await?;
                 return Ok(LoadedLayer::from_objects(content));
             };
@@ -1131,12 +1164,14 @@ mod tests {
         let Expansion::Package {
             package,
             context: child,
-        } = context.child_package("/ROOT/CHILD".to_owned())
+            has_child_packages,
+        } = context.child_package("/ROOT/CHILD".to_owned(), true)
         else {
             panic!("expected a package expansion");
         };
 
         assert_eq!(package, "/ROOT/CHILD");
+        assert!(has_child_packages);
         assert!(Arc::ptr_eq(&context.facet_policy, &child.facet_policy));
         assert_eq!(child.preselections(), context.preselections());
     }
