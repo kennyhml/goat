@@ -3,7 +3,7 @@ use std::{borrow::Cow, fmt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    AdtUri, GlobalWorkbenchType, InvalidWorkbenchType, ObjectError, ObjectRef, Package,
+    AdtUri, GlobalWorkbenchType, InvalidWorkbenchType, ObjectError, ObjectRef, ObjectType, Package,
     RepositoryError,
     resource::{AdvertisedLink, Relations},
 };
@@ -267,6 +267,29 @@ impl RepositoryObjectEntry {
     /// Returns links advertised for this repository object.
     pub fn relations(&self) -> &Relations {
         &self.relations
+    }
+
+    /// Converts this RIS entry into a checked static object reference.
+    ///
+    /// The conversion verifies the exact Workbench type and preserves the URI
+    /// advertised by RIS rather than reconstructing it through discovery.
+    pub fn typed_reference<T: ObjectType>(&self) -> Result<ObjectRef<T>, ObjectError> {
+        if self.object_type.as_str() != T::WORKBENCH_TYPE.to_string() {
+            return Err(ObjectError::UnexpectedRepositoryObjectType {
+                expected: T::WORKBENCH_TYPE,
+                actual: self.object_type.to_string(),
+            });
+        }
+
+        ObjectRef::from_parts(self.name.clone(), self.reference.uri().clone())
+    }
+}
+
+impl<T: ObjectType> TryFrom<&RepositoryObjectEntry> for ObjectRef<T> {
+    type Error = ObjectError;
+
+    fn try_from(entry: &RepositoryObjectEntry) -> Result<Self, Self::Error> {
+        entry.typed_reference()
     }
 }
 
@@ -702,6 +725,7 @@ struct RawRepositoryProperty {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Class, Program};
 
     const CONTENT_XML: &[u8] = include_bytes!("../../tests/fixtures/repository-content.xml");
     const FACETS_XML: &[u8] = include_bytes!("../../tests/fixtures/repository-facets.xml");
@@ -779,6 +803,26 @@ mod tests {
                 .target,
             *content.objects[0].reference.uri()
         );
+    }
+
+    #[test]
+    fn converts_ris_entries_to_checked_typed_references_without_changing_the_uri() {
+        let base =
+            AdtUri::parse("/sap/bc/adt/repository/informationsystem/virtualfolders/contents")
+                .unwrap();
+        let content = RepositoryContent::parse(CONTENT_XML, &base).unwrap();
+        let entry = &content.objects[0];
+
+        let class = entry.typed_reference::<Class>().unwrap();
+        assert_eq!(class.name(), "ZCL_DEMO");
+        assert_eq!(class.uri(), entry.reference.uri());
+
+        let error = ObjectRef::<Program>::try_from(entry).unwrap_err();
+        assert!(matches!(
+            error,
+            ObjectError::UnexpectedRepositoryObjectType { expected, actual }
+                if expected == Program::WORKBENCH_TYPE && actual == "CLAS/OC"
+        ));
     }
 
     #[test]

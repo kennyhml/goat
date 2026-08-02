@@ -54,9 +54,9 @@ pub use models::{
     SyntaxLanguage, SystemInformationLink, TemplateLink, Workspace,
 };
 pub use objects::{
-    GlobalWorkbenchType, Include, InvalidWorkbenchType, ObjectCollection, ObjectNamePolicy,
-    ObjectProperties, ObjectRef, ObjectType, ObjectVersion, Package, Program, RepositoryObject,
-    Source,
+    Class, ClassSourceComponent, GlobalWorkbenchType, Include, InvalidWorkbenchType,
+    ObjectCollection, ObjectNamePolicy, ObjectProperties, ObjectRef, ObjectType, ObjectVersion,
+    Package, Program, RepositoryObject, Source,
 };
 pub use operation::{
     Conditional, Executor, IfNoneMatch, Operation, OperationKind, QueryMode, Stateful, Stateless,

@@ -63,6 +63,15 @@
         </app:collection>
     </app:workspace>
     <app:workspace>
+        <atom:title>Object Oriented Programming</atom:title>
+        <app:collection href="/sap/bc/adt/oo/classes">
+            <atom:title>Classes</atom:title>
+            <atom:category
+                term="classes"
+                scheme="http://www.sap.com/adt/categories/oo" />
+        </app:collection>
+    </app:workspace>
+    <app:workspace>
         <atom:title>Repository Information</atom:title>
         <app:collection href="/sap/bc/adt/repository/informationsystem/virtualfolders/contents">
             <atom:title>Virtual Folders Contents</atom:title>

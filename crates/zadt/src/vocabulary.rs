@@ -27,6 +27,11 @@ pub(crate) const PROGRAM_RUN: CategoryId = CategoryId {
     term: "programrun",
 };
 
+pub(crate) const CLASSES: CategoryId = CategoryId {
+    scheme: "http://www.sap.com/adt/categories/oo",
+    term: "classes",
+};
+
 pub(crate) const PROGRAM_RUN_RELATION: &str =
     "http://www.sap.com/adt/relations/programs/programrun";
 

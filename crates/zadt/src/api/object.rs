@@ -273,7 +273,7 @@ fn expect_ok(response: &AdtResponse) -> Result<(), ResponseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ObjectRef, Program};
+    use crate::{Class, ClassSourceComponent, ObjectRef, Program};
 
     #[test]
     fn object_operations_do_not_require_discovery() {
@@ -296,6 +296,32 @@ mod tests {
             program.source().uri.as_str(),
             "/sap/bc/adt/programs/programs/ZPROGRAM/source/main"
         );
+    }
+
+    #[test]
+    fn derives_class_source_component_resources() {
+        let class = ObjectRef::<Class>::for_test(
+            "ZCL_EXAMPLE",
+            crate::AdtUri::parse("/sap/bc/adt/oo/classes/zcl_example").unwrap(),
+        );
+
+        for (component, suffix) in [
+            (ClassSourceComponent::Main, "source/main"),
+            (ClassSourceComponent::Definitions, "includes/definitions"),
+            (
+                ClassSourceComponent::Implementations,
+                "includes/implementations",
+            ),
+            (ClassSourceComponent::Macros, "includes/macros"),
+            (ClassSourceComponent::TestClasses, "includes/testclasses"),
+        ] {
+            let source = class.component_source(component);
+            assert_eq!(
+                source.uri.as_str(),
+                format!("/sap/bc/adt/oo/classes/zcl_example/{suffix}")
+            );
+            assert_eq!(source.object, class.erase());
+        }
     }
 
     #[test]

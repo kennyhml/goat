@@ -155,6 +155,7 @@ execution capabilities:
 | `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable reference such as `ObjectRef<Program>` |
 | `ObjectRef<Program>` | A typed ABAP program reference | `Client<Ready>::object::<Program>(name)` |
 | `ObjectRef<Include>` | A typed standalone-include reference | `Client<Ready>::object::<Include>(name)` |
+| `ObjectRef<Class>` | A typed ABAP class reference | `RepositoryObjectEntry::typed_reference::<Class>()` or `Client<Ready>::object::<Class>(name)` |
 | `ObjectRef<Package>` | A typed ABAP package reference | An embedded package reference or `Client<Ready>::object::<Package>(name)` |
 | `OwnedResourceRef<T>` | Shared owner and link metadata for a typed relation reference | Relation resolution |
 | `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources plus their owning object | Fetched properties such as `ProgramProperties` |
@@ -172,6 +173,11 @@ let program = client.object::<Program>("ZDEMO")?;
 Domain references expose only the conventions established for that resource
 type. Keeping the owning `ObjectRef` inside `SourceRef` lets the update builder
 reject a `LockHandle` obtained for a different object before any request is sent.
+
+Class-local definitions, implementations, macros, and test classes are source
+components owned by the class, not independent repository objects. Resolve them
+with `ObjectRef<Class>::component_source(ClassSourceComponent)`; the resulting
+`SourceRef` retains the class identity required for locking and updates.
 
 ## Program properties
 

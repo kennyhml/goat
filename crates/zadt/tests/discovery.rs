@@ -6,7 +6,7 @@ use httpmock::Mock;
 use httpmock::prelude::*;
 use std::sync::{Arc, Mutex};
 use zadt::{
-    AdtRequest, AdtResponse, CategoryId, Client, CoreDiscoveryQuery, DiscoveryError,
+    AdtRequest, AdtResponse, CategoryId, Class, Client, CoreDiscoveryQuery, DiscoveryError,
     DiscoveryQuery, Logon, Operation, OperationError, ReqwestTransport, ResponseError, Transport,
     TransportError,
 };
@@ -86,6 +86,18 @@ async fn client_discovery_transitions_and_retains_capabilities() {
         client.capabilities(),
         cloned_client.capabilities()
     ));
+}
+
+#[tokio::test]
+async fn class_references_use_the_discovered_oo_collection() {
+    let client = Client::new(FixtureTransport::new(DISCOVERY_XML));
+    Logon.execute(&client).await.unwrap();
+    let client = client.discover().await.unwrap();
+
+    let class = client.object::<Class>("ZCL_EXAMPLE").unwrap();
+
+    assert_eq!(class.name(), "ZCL_EXAMPLE");
+    assert_eq!(class.uri().as_str(), "/sap/bc/adt/oo/classes/zcl_example");
 }
 
 #[tokio::test]

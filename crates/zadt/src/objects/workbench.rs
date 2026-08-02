@@ -137,7 +137,7 @@ impl TryFrom<String> for GlobalWorkbenchType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Include, ObjectType, Program};
+    use crate::{Class, Include, ObjectType, Program};
 
     #[test]
     fn global_workbench_types_use_unpadded_sap_field_limits() {
@@ -148,6 +148,7 @@ mod tests {
         assert_eq!(object_type.to_string(), "ABCD/XYZ");
         assert_eq!(Program::WORKBENCH_TYPE.to_string(), "PROG/P");
         assert_eq!(Include::WORKBENCH_TYPE.to_string(), "PROG/I");
+        assert_eq!(Class::WORKBENCH_TYPE.to_string(), "CLAS/OC");
     }
 
     #[test]

@@ -42,12 +42,13 @@ impl ObjectNamePolicy {
 
 #[cfg(test)]
 mod test {
-    use crate::{Include, ObjectError, ObjectType, Program};
+    use crate::{Class, Include, ObjectError, ObjectType, Program};
 
     #[test]
     fn object_name_policies_enforce_type_specific_limits() {
         assert_eq!(Program::NAMING_POLICY.maximum_length(), 30);
         assert_eq!(Include::NAMING_POLICY.maximum_length(), 40);
+        assert_eq!(Class::NAMING_POLICY.maximum_length(), 30);
         assert!(Program::NAMING_POLICY.validate(&"A".repeat(30)).is_ok());
         assert!(Include::NAMING_POLICY.validate(&"A".repeat(40)).is_ok());
 

@@ -133,6 +133,12 @@ pub enum ObjectError {
         actual: GlobalWorkbenchType,
     },
 
+    #[error("expected repository object type `{expected}`, but RIS advertised `{actual}`")]
+    UnexpectedRepositoryObjectType {
+        expected: GlobalWorkbenchType,
+        actual: String,
+    },
+
     #[error("expected compact object type `{expected}`, but the response advertised `{actual}`")]
     UnexpectedCompactObjectType {
         expected: &'static str,

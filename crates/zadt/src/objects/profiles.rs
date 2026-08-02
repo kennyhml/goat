@@ -9,12 +9,14 @@ use crate::{
         ProgramProperties, ProgramPropertiesVersion,
     },
     protocol::EntityTag,
-    vocabulary::{CategoryId, INCLUDES, PROGRAMS},
+    resource::SourceRef,
+    vocabulary::{CLASSES, CategoryId, INCLUDES, PROGRAMS},
 };
 
 impl private::Sealed for Package {}
 impl private::Sealed for Program {}
 impl private::Sealed for Include {}
+impl private::Sealed for Class {}
 
 /// The package (devclass) object type.
 #[derive(Debug)]
@@ -104,6 +106,68 @@ impl ObjectProperties for Include {
     }
 }
 
+/// An ABAP class object.
+#[derive(Debug)]
+pub enum Class {}
+
+impl ObjectType for Class {
+    const WORKBENCH_TYPE: GlobalWorkbenchType = GlobalWorkbenchType::new("CLAS", "OC");
+    const NAMING_POLICY: ObjectNamePolicy = ObjectNamePolicy::new(30);
+}
+
+impl ObjectCollection for Class {
+    const CATEGORY: CategoryId = CLASSES;
+}
+
+impl Source for Class {}
+
+/// A source component owned and locked by an ABAP class.
+///
+/// Local class includes are ADT resources beneath the class object rather than
+/// independent repository objects.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ClassSourceComponent {
+    Main,
+    Definitions,
+    Implementations,
+    Macros,
+    TestClasses,
+}
+
+impl ClassSourceComponent {
+    /// Returns the component name used by ADT.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Definitions => "definitions",
+            Self::Implementations => "implementations",
+            Self::Macros => "macros",
+            Self::TestClasses => "testclasses",
+        }
+    }
+
+    const fn path(self) -> &'static [&'static str] {
+        match self {
+            Self::Main => &["source", "main"],
+            Self::Definitions => &["includes", "definitions"],
+            Self::Implementations => &["includes", "implementations"],
+            Self::Macros => &["includes", "macros"],
+            Self::TestClasses => &["includes", "testclasses"],
+        }
+    }
+}
+
+impl ObjectRef<Class> {
+    /// Resolves one of the source resources owned by this class.
+    pub fn component_source(&self, component: ClassSourceComponent) -> SourceRef {
+        let uri = self
+            .uri()
+            .append_segments(component.path())
+            .expect("static class source path segments form a valid ADT URI");
+        SourceRef::new(self.erase(), uri)
+    }
+}
+
 impl ObjectRef<Program> {
     #[cfg(test)]
     pub(crate) fn for_test(name: &str, uri: crate::AdtUri) -> Self {
@@ -119,6 +183,13 @@ impl ObjectRef<Package> {
 }
 
 impl ObjectRef<Include> {
+    #[cfg(test)]
+    pub(crate) fn for_test(name: &str, uri: crate::AdtUri) -> Self {
+        Self::typed(name.to_ascii_uppercase(), uri)
+    }
+}
+
+impl ObjectRef<Class> {
     #[cfg(test)]
     pub(crate) fn for_test(name: &str, uri: crate::AdtUri) -> Self {
         Self::typed(name.to_ascii_uppercase(), uri)

@@ -16,7 +16,7 @@ mod workbench;
 
 pub use capabilities::{ObjectProperties, Source};
 pub use policies::ObjectNamePolicy;
-pub use profiles::{Include, Package, Program};
+pub use profiles::{Class, ClassSourceComponent, Include, Package, Program};
 pub use version::ObjectVersion;
 pub use workbench::{GlobalWorkbenchType, InvalidWorkbenchType};
 
