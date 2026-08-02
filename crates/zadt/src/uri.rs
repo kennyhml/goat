@@ -1,5 +1,6 @@
 use std::fmt;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use thiserror::Error;
 use url::Url;
 
@@ -17,6 +18,25 @@ const VALIDATION_ORIGIN: &str = "https://adt.invalid";
 /// central ADT discovery.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AdtUri(String);
+
+impl Serialize for AdtUri {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AdtUri {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(D::Error::custom)
+    }
+}
 
 impl AdtUri {
     pub fn parse(value: &str) -> Result<Self, AdtUriError> {

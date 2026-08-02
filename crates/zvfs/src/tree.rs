@@ -20,7 +20,7 @@ use futures_util::future::try_join;
 use parking_lot::RwLock;
 use uuid::Uuid;
 use zadt::{
-    Client, Operation, Ready, RepositoryContent, RepositoryContentOperation,
+    Client, Operation, Package, Ready, RepositoryContent, RepositoryContentOperation,
     RepositoryContentQuery, RepositoryFacet, RepositoryFacetDefinition, RepositoryFacetsQuery,
     RepositoryObjectEntry, RepositoryPreselection, RepositoryVirtualFolder,
 };
@@ -370,16 +370,23 @@ impl PreparedNode {
     /// Constructs a prepared node from a virtual repository folder representing a package.
     ///
     /// This assumes that it has already been verified that the folder is a package.
-    fn from_package_folder(folder: RepositoryVirtualFolder, ctx: &ExpansionContext) -> Self {
-        Self {
+    fn from_package_folder(
+        folder: RepositoryVirtualFolder,
+        ctx: &ExpansionContext,
+    ) -> Result<Self, VfsError> {
+        let uri = folder
+            .uri
+            .ok_or_else(|| VfsError::MissingPackageUri(folder.name.clone()))?;
+        Ok(Self {
             label: folder.name.clone(),
             kind: NodeKind::Package {
                 package: folder.name.clone(),
+                uri,
                 object_count: Some(folder.object_count),
             },
             expansion: ctx.child_package(folder.name, folder.has_children_of_same_facet),
             object: None,
-        }
+        })
     }
 
     fn tree_order(&self, other: &Self) -> Ordering {
@@ -398,15 +405,15 @@ impl PreparedNode {
     }
 }
 
-impl From<Mount> for PreparedNode {
-    fn from(mount: Mount) -> Self {
+impl PreparedNode {
+    fn from_mount(mount: Mount, client: &Client<Ready>) -> Result<Self, VfsError> {
         let Mount {
             label,
             target,
             facet_policy,
         } = mount;
-        match target {
-            MountTarget::SystemLibrary => PreparedNode {
+        Ok(match target {
+            MountTarget::SystemLibrary => Self {
                 label,
                 kind: NodeKind::Mount {
                     mount: MountKind::SystemLibrary,
@@ -417,10 +424,11 @@ impl From<Mount> for PreparedNode {
                 },
                 object: None,
             },
-            MountTarget::Package(package) => PreparedNode {
+            MountTarget::Package(package) => Self {
                 label,
                 kind: NodeKind::Package {
                     package: package.clone(),
+                    uri: client.object::<Package>(&package)?.uri().clone(),
                     object_count: None,
                 },
                 // Load sub packages
@@ -432,7 +440,7 @@ impl From<Mount> for PreparedNode {
                 },
                 object: None,
             },
-            MountTarget::Selection(preselections) => PreparedNode {
+            MountTarget::Selection(preselections) => Self {
                 label,
                 kind: NodeKind::Mount {
                     mount: MountKind::Selection,
@@ -443,7 +451,7 @@ impl From<Mount> for PreparedNode {
                 },
                 object: None,
             },
-        }
+        })
     }
 }
 
@@ -453,7 +461,7 @@ impl From<RepositoryObjectEntry> for PreparedNode {
             name: entry.name.clone(),
             package: entry.package.clone(),
             object_type: entry.object_type.to_string(),
-            uri: entry.reference.uri().to_string(),
+            uri: entry.reference.uri().clone(),
             virtual_workbench_uri: entry.virtual_workbench_uri.clone(),
             version: entry.version.clone(),
             expandable: entry.expandable,
@@ -490,20 +498,20 @@ impl LoadedLayer {
     ///
     /// Crucially, package replies may include things that should not actually become part
     /// of the tree. For instance, the `../DMO/PACKAGE` notation for directly assigned objects.
-    fn from_packages(content: RepositoryContent, ctx: ExpansionContext) -> Self {
+    fn from_packages(content: RepositoryContent, ctx: ExpansionContext) -> Result<Self, VfsError> {
         let object_count = content.object_count;
         let mut nodes = content
             .folders
             .into_iter()
             .filter(|f| f.facet == RepositoryFacet::PACKAGE && !f.is_direct_assignment())
             .map(|f| PreparedNode::from_package_folder(f, &ctx))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
 
         nodes.sort_by(PreparedNode::tree_order);
-        Self {
+        Ok(Self {
             nodes,
             object_count,
-        }
+        })
     }
 
     /// Converts a set of virtual folders from a [`RepositoryContent`] reply into
@@ -608,7 +616,7 @@ impl VirtualRepositoryTreeBuilder {
             }
         }
 
-        Ok(VirtualRepositoryTree::from_builder(self, facets))
+        VirtualRepositoryTree::from_builder(self, facets)
     }
 }
 
@@ -618,7 +626,11 @@ impl VirtualRepositoryTree {
         VirtualRepositoryTreeBuilder::new(client)
     }
 
-    fn from_builder(builder: VirtualRepositoryTreeBuilder, facets: FacetCatalog) -> Self {
+    fn from_builder(
+        builder: VirtualRepositoryTreeBuilder,
+        facets: FacetCatalog,
+    ) -> Result<Self, VfsError> {
+        let VirtualRepositoryTreeBuilder { client, mounts } = builder;
         let mut graph = Graph::new();
         let root = graph.insert(
             None,
@@ -630,11 +642,12 @@ impl VirtualRepositoryTree {
             },
         );
 
-        let mut children = Vec::with_capacity(builder.mounts.len());
-        for mount in builder.mounts {
+        let mut children = Vec::with_capacity(mounts.len());
+        for mount in mounts {
+            let node = PreparedNode::from_mount(mount, &client)?;
             children.push(
                 graph
-                    .insert(Some(root), mount.into())
+                    .insert(Some(root), node)
                     .index_for(graph.scope)
                     .expect("a newly inserted node belongs to its graph"),
             );
@@ -648,14 +661,14 @@ impl VirtualRepositoryTree {
             .expect("the root remains present while constructing the graph")
             .children = Some(children);
 
-        Self {
+        Ok(Self {
             inner: Arc::new(Inner {
-                client: builder.client,
+                client,
                 root,
                 graph: RwLock::new(graph),
                 facets,
             }),
-        }
+        })
     }
 
     /// Returns the static root node identity.
@@ -866,7 +879,7 @@ impl VirtualRepositoryTree {
                     .query_content(context.preselections(), Some(&RepositoryFacet::PACKAGE))
                     .await?;
                 Ok(Loaded {
-                    prepared: LoadedLayer::from_packages(content, context).nodes,
+                    prepared: LoadedLayer::from_packages(content, context)?.nodes,
                     object_count: None,
                     has_children_of_same_facet: None,
                 })
@@ -1024,7 +1037,7 @@ impl VirtualRepositoryTree {
         let direct_objects = self.load_next_content_layer(direct_context, 0);
         let (packages, objects) = try_join(child_packages, direct_objects).await?;
 
-        let mut nodes = LoadedLayer::from_packages(packages, context).nodes;
+        let mut nodes = LoadedLayer::from_packages(packages, context)?.nodes;
         nodes.extend(objects.nodes);
         nodes.sort_by(PreparedNode::tree_order);
         Ok(nodes)

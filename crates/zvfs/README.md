@@ -195,6 +195,8 @@ without preventing separate branches from loading concurrently.
 Each node receives a tree-scoped `NodeId` containing a UUID and a monotonic
 numeric index. Live records are stored in a `HashMap` keyed by that index.
 Removed IDs remain stale and cannot resolve to newly inserted nodes.
+Repository package and object locations are exposed as validated `AdtUri`
+values rather than unchecked strings.
 
 `zvfs` models repository hierarchy only. Repository objects are leaves in this
 tree. Source retrieval, editing, persistence, and local-file projection belong

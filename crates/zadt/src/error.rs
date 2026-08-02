@@ -183,6 +183,13 @@ pub enum RepositoryError {
         uri: String,
         source: AdtUriError,
     },
+
+    #[error("repository folder `{name}` advertised invalid URI `{uri}`: {source}")]
+    InvalidFolderUri {
+        name: String,
+        uri: String,
+        source: AdtUriError,
+    },
 }
 
 impl From<AdtLinkError> for ObjectError {

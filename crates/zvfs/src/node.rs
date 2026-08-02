@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use zadt::AdtUri;
 
 /// An opaque node identity scoped to one VFS instance.
 ///
@@ -57,6 +58,7 @@ pub enum NodeKind {
     },
     Package {
         package: String,
+        uri: AdtUri,
         object_count: Option<u32>,
     },
     Facet {
@@ -96,7 +98,7 @@ pub struct ObjectNode {
     pub name: String,
     pub package: String,
     pub object_type: String,
-    pub uri: String,
+    pub uri: AdtUri,
     pub virtual_workbench_uri: Option<String>,
     pub version: Option<String>,
     pub expandable: bool,

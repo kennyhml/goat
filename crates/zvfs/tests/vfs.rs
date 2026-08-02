@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use http::{HeaderMap, StatusCode};
 use tokio::sync::Notify;
 use zadt::{
-    AdtRequest, AdtResponse, Client, RepositoryFacet, RepositoryPreselection, Transport,
+    AdtRequest, AdtResponse, Client, Package, RepositoryFacet, RepositoryPreselection, Transport,
     TransportError,
 };
 use zvfs::{FacetLevel, FacetPolicy, Mount, NodeId, NodeKind, VfsError, VirtualRepositoryTree};
@@ -45,9 +45,19 @@ const CHILD_PACKAGES_XML: &str = r#"
         objectCount="9">
         <vfs:preselectionInfo facet="PACKAGE" hasChildrenOfSameFacet="true" />
         <vfs:virtualFolder name="../ROOT" displayName="../ROOT" facet="PACKAGE"
+            uri="/sap/bc/adt/packages/%2froot"
             counter="2" hasChildrenOfSameFacet="false" />
         <vfs:virtualFolder name="/ROOT/CHILD" displayName="/ROOT/CHILD" facet="PACKAGE"
+            uri="/sap/bc/adt/packages/%2froot%2fchild"
             counter="7" hasChildrenOfSameFacet="false" />
+    </vfs:virtualFoldersResult>
+"#;
+
+const CHILD_PACKAGE_WITHOUT_URI_XML: &str = r#"
+    <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
+        objectCount="1">
+        <vfs:virtualFolder name="/ROOT/CHILD" displayName="/ROOT/CHILD" facet="PACKAGE"
+            counter="1" hasChildrenOfSameFacet="false" />
     </vfs:virtualFoldersResult>
 "#;
 
@@ -86,6 +96,7 @@ const OBJECT_XML: &str = r#"
 #[derive(Clone, Copy)]
 enum Behavior {
     Tree,
+    MissingPackageUri,
     Adaptive(u32),
     AdaptiveRefresh,
     AdaptiveHierarchyRefresh,
@@ -157,6 +168,17 @@ impl TestTransport {
                 } else {
                     Err(io::Error::other(format!(
                         "unexpected tree request body: {body}"
+                    )))
+                }
+            }
+            Behavior::MissingPackageUri => {
+                if body.contains("<vfs:facet>PACKAGE</vfs:facet>") {
+                    Ok(CHILD_PACKAGE_WITHOUT_URI_XML.to_owned())
+                } else if body.contains("<vfs:facet>GROUP</vfs:facet>") {
+                    Ok(GROUP_XML.to_owned())
+                } else {
+                    Err(io::Error::other(format!(
+                        "unexpected missing-package-uri request body: {body}"
                     )))
                 }
             }
@@ -432,6 +454,7 @@ async fn validates_facet_policies_while_building() {
 #[tokio::test]
 async fn traverses_packages_groups_types_and_objects() {
     let (client, state) = client(Behavior::Tree).await;
+    let expected_mount_uri = client.object::<Package>("/ROOT").unwrap().uri().clone();
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(Mount::package("/ROOT"))
         .build()
@@ -442,7 +465,10 @@ async fn traverses_packages_groups_types_and_objects() {
 
     let mounts = vfs.children(vfs.root()).await.unwrap();
     assert_eq!(mounts.len(), 1);
-    assert!(matches!(mounts[0].kind, NodeKind::Package { .. }));
+    assert!(matches!(
+        &mounts[0].kind,
+        NodeKind::Package { uri, .. } if uri == &expected_mount_uri
+    ));
 
     let package_children = vfs.children(mounts[0].id).await.unwrap();
     assert_eq!(
@@ -452,6 +478,11 @@ async fn traverses_packages_groups_types_and_objects() {
             .collect::<Vec<_>>(),
         ["/ROOT/CHILD", "Source Code Library"]
     );
+    assert!(matches!(
+        &package_children[0].kind,
+        NodeKind::Package { uri, .. }
+            if uri.as_str() == "/sap/bc/adt/packages/%2froot%2fchild"
+    ));
 
     let group = package_children
         .iter()
@@ -498,6 +529,24 @@ async fn traverses_packages_groups_types_and_objects() {
             .iter()
             .any(|request| request.contains("<vfs:value>../ROOT</vfs:value>"))
     );
+}
+
+#[tokio::test]
+async fn rejects_package_folders_without_resource_uris() {
+    let (client, _) = client(Behavior::MissingPackageUri).await;
+    let vfs = VirtualRepositoryTree::builder(client)
+        .mount(Mount::package("/ROOT"))
+        .build()
+        .await
+        .unwrap();
+    let package = vfs.children(vfs.root()).await.unwrap().remove(0);
+
+    let error = vfs.children(package.id).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        VfsError::MissingPackageUri(package) if package == "/ROOT/CHILD"
+    ));
 }
 
 #[tokio::test]

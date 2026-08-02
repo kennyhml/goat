@@ -192,6 +192,8 @@ pub struct RepositoryPreselectionInfo {
 pub struct RepositoryVirtualFolder {
     /// The technical folder value, such as `CLAS`.
     pub name: String,
+    /// The validated resource URI when this folder represents an ADT resource.
+    pub uri: Option<AdtUri>,
     /// The server-provided display label.
     pub display_name: String,
     /// The facet by which this folder groups its contents.
@@ -286,16 +288,29 @@ impl RepositoryContent {
         let folders = raw
             .folders
             .into_iter()
-            .map(|folder| RepositoryVirtualFolder {
-                name: folder.name,
-                display_name: folder.display_name,
-                facet: folder.facet,
-                object_count: folder.object_count,
-                text: folder.text,
-                has_children_of_same_facet: folder.has_children_of_same_facet,
-                relations: Relations::new(query_reference.clone(), folder.links),
+            .map(|folder| {
+                let uri = folder
+                    .uri
+                    .map(|uri| {
+                        AdtUri::parse(&uri).map_err(|source| RepositoryError::InvalidFolderUri {
+                            name: folder.name.clone(),
+                            uri,
+                            source,
+                        })
+                    })
+                    .transpose()?;
+                Ok(RepositoryVirtualFolder {
+                    name: folder.name,
+                    uri,
+                    display_name: folder.display_name,
+                    facet: folder.facet,
+                    object_count: folder.object_count,
+                    text: folder.text,
+                    has_children_of_same_facet: folder.has_children_of_same_facet,
+                    relations: Relations::new(query_reference.clone(), folder.links),
+                })
             })
-            .collect();
+            .collect::<Result<_, RepositoryError>>()?;
         let objects = raw
             .objects
             .into_iter()
@@ -568,6 +583,8 @@ struct RawPreselectionInfo {
 struct RawVirtualFolder {
     #[serde(rename = "@name")]
     name: String,
+    #[serde(rename = "@uri")]
+    uri: Option<String>,
     #[serde(rename = "@displayName")]
     display_name: String,
     #[serde(rename = "@facet")]
@@ -739,6 +756,7 @@ mod tests {
             RepositoryFacet::PACKAGE
         );
         assert_eq!(content.folders[0].name, "SOURCE_LIBRARY");
+        assert_eq!(content.folders[0].uri, None);
         assert!(!content.folders[0].is_direct_assignment());
         assert_eq!(content.folders[0].relations().len(), 1);
         assert_eq!(
@@ -761,6 +779,39 @@ mod tests {
                 .target,
             *content.objects[0].reference.uri()
         );
+    }
+
+    #[test]
+    fn parses_virtual_folder_resource_uris() {
+        let xml = String::from_utf8(CONTENT_XML.to_vec()).unwrap().replace(
+            "<vfs:virtualFolder name=\"SOURCE_LIBRARY\"",
+            "<vfs:virtualFolder name=\"SOURCE_LIBRARY\" uri=\"/sap/bc/adt/packages/%2ftmp\"",
+        );
+        let base =
+            AdtUri::parse("/sap/bc/adt/repository/informationsystem/virtualfolders/contents")
+                .unwrap();
+
+        let content = RepositoryContent::parse(xml.as_bytes(), &base).unwrap();
+
+        assert_eq!(
+            content.folders[0].uri.as_ref().unwrap().as_str(),
+            "/sap/bc/adt/packages/%2ftmp"
+        );
+    }
+
+    #[test]
+    fn rejects_virtual_folder_uris_outside_the_sap_namespace() {
+        let xml = String::from_utf8(CONTENT_XML.to_vec()).unwrap().replace(
+            "<vfs:virtualFolder name=\"SOURCE_LIBRARY\"",
+            "<vfs:virtualFolder name=\"SOURCE_LIBRARY\" uri=\"https://attacker.example/package\"",
+        );
+        let base =
+            AdtUri::parse("/sap/bc/adt/repository/informationsystem/virtualfolders/contents")
+                .unwrap();
+
+        let error = RepositoryContent::parse(xml.as_bytes(), &base).unwrap_err();
+
+        assert!(matches!(error, RepositoryError::InvalidFolderUri { .. }));
     }
 
     #[test]

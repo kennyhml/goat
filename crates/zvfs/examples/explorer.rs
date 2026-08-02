@@ -220,10 +220,12 @@ fn print_node(node: &Node) {
         NodeKind::Mount { mount } => println!("kind:   mount ({mount:?})"),
         NodeKind::Package {
             package,
+            uri,
             object_count,
         } => {
             println!("kind:   package");
             println!("name:   {package}");
+            println!("uri:    {uri}");
             if let Some(count) = object_count {
                 println!("objects: {count}");
             }
