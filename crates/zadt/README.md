@@ -1,355 +1,143 @@
 # zadt
 
-Typed SAP ABAP Development Tools protocol support for the Ziege framework.
+ABAP Development Tools protocol for the Ziege framework.
 
-Cleaner rewrite of [adt-query](https://github.com/kennyhml/adt-query) to better make use of HATEOAS.
+## Background
 
-## Discovery endpoints
-ADT exposes two AtomPub service documents with different roles:
+The ABAP Development Tools are more than just an Eclipse plugin. On the actual ABAP 
+Application Server, they represent a whole framework for ABAP development tooling 
+exposed via RFC or ICF (HTTP). The idea is similar to how the more modern language server
+protocol works. Although while a language server intentionally decouples sender from receiver, 
+ABAP development generally happens on the system itself and **must** serve language server like
+features via external communication.
 
-| Operation | Endpoint | Role |
-| --- | --- | --- |
-| `CoreDiscoveryQuery` | `/sap/bc/adt/core/discovery` | Small bootstrap document advertising infrastructure such as compatibility and batch resources. |
-| `DiscoveryQuery` | `/sap/bc/adt/discovery` | Central document advertising domain workspaces and collections such as programs. |
+For anyone curious about them, you can enable the `ABAP Communication Log` view inside ecplise.
 
-Both operations have fixed URIs and can execute before central discovery.
-`CoreDiscoveryQuery` returns its capabilities without changing the client state.
-`Client::new()` creates an `Initial` client, and `Client::discover()` executes
-`DiscoveryQuery` and stores its result while transitioning the client to `Ready`.
-HTTP security-session establishment remains an explicit `Logon` operation and
-does not become client typestate.
+## Design
 
-Discovery is the top-level capability map, not a complete description of
-every ADT interaction. Later resource representations can advertise
-resource-specific links, and operation-specific request and response formats
-remain part of their media-type contracts.
+### Discovery
 
-## Server-side handlers
+`ZADT` attempts to make proper use of the HATEOAS design of the ADT API. Unfortunately, this aspect is
+almost always ignored by clients using such APIs, which makes it difficult for the provider of the API
+to make changes that would otherwise be non breaking, such as changing the location of a resource.
 
-SAP's ADT development diagnostics map a resource URI to the ABAP application
-that registered it and to the resource method that serves it:
-
-```text
-GET /sap/bc/adt/development/handler/application?uri=<ADT URI>
-GET /sap/bc/adt/development/handler/adtresource?uri=<ADT URI>&method=GET
-```
-
-The following handlers were observed for the discovery endpoints:
-
-| Endpoint | Registration handler | GET resource handler |
-| --- | --- | --- |
-| `/sap/bc/adt/core/discovery` | `CL_ADT_DISCOVERY_BASE_RES_APP->REGISTER_RESOURCES` | `CL_ADT_RES_DISCOVERY_BASE->GET` |
-| `/sap/bc/adt/discovery` | `CL_ADT_DISCOVERY_RES_APP->REGISTER_RESOURCES` | `CL_ADT_RES_DISCOVERY->GET` |
-
-The diagnostic responses link directly to the corresponding class source
-under `/sap/bc/adt/oo/classes/.../source/main`. These class and method names
-are useful when investigating server behavior, but they are SAP
-implementation details and may differ by release. The development diagnostic
-endpoints can also be unavailable or unauthorized on production systems.
-`zadt` depends on the discovery wire contract, not these implementation
-class names.
-
-## Execution model
-Operations produce transport-neutral ADT requests. `ReqwestTransport` is the
-default HTTP implementation; other HTTP clients and future RFC-backed
-transports can implement the `Transport` trait. Stateless operations execute
-directly through `Client`; operations requiring a persistent SAP user session
-are represented separately as stateful operations.
-
-Enabling the `logging` feature and importing `TransportExt` adds `.traced()` to
-every concrete transport. The decorator emits redacted structured `tracing`
-events that a CLI, language server, or test subscriber can route to its
-preferred output.
-
-Request and response bodies remain omitted by default. Diagnostic applications
-can opt in with `.traced().with_body_logging(max_bytes)`. Textual request bodies
-are logged as UTF-8, while XML requests and responses are indented when valid.
-Other response media types and bodies over the configured limit are omitted.
-Body logs can contain source code or business data and should not be enabled in
-normal production logging.
-
-### SAP session terminology
-
-| Term | Representation | Purpose |
-| --- | --- | --- |
-| User context | `sap-usercontext` | Selects the SAP client and language. |
-| HTTP security session | `SAP_SESSIONID_*` and related cookies | Retains authenticated HTTP session state shared by requests from one transport. |
-| User session | `sap-contextid` | Retains stateful ABAP execution state across requests. Active sessions can be inspected in transaction `SM04`. |
-
-A user session is used for workflows such as editing a program, where a lock
-must remain valid across multiple requests. It is bound to the HTTP security
-session but has its own identity and lifecycle.
-
-`ReqwestTransport` sends the configured SAP client and language in the
-`sap-usercontext` cookie. They are intentionally not appended to every resource
-URI: some ADT handlers, including core discovery on tested systems, interpret
-all query parameters as operation-specific input.
-
-The transport retains response cookies in an RFC-aware, destination-scoped
-cookie store, allowing stateless operations to reuse the same SAP HTTP security
-session. It deliberately excludes `sap-contextid`: that cookie identifies one
-SAP user session and is owned by the corresponding `UserSession`
-rather than shared across every request.
-
-A `UserSession` owns a cheap clone of its client. The transport and any loaded
-capabilities remain shared through `Arc`, so the session has no borrowing
-lifetime and can be stored for an entire editing workflow. Requests through one
-session are serialized and carry its latest `sap-contextid`; separate user
-sessions retain independent context IDs while sharing the client's HTTP security
-session.
-Call `UserSession::close()` when the workflow finishes. Dropping an instance
-only releases local state and does not notify SAP.
-
-### HTTP security-session resource
-
-SAP also exposes a fixed HTTP security-session resource that was not advertised
-by either discovery document on the tested A4H system:
-
-```text
-GET /sap/bc/adt/core/http/sessions
-Accept: application/vnd.sap.adt.core.http.session.v3+xml
-x-sap-security-session: create
-sap-adt-purpose: logon
-sap-adt-saplb: fetch
-sap-cancel-on-close: true
-```
-
-Its response contains the current security-context reference, the configured
-inactivity timeout, a current-session logoff link, and a system-information
-link. The security-session relation targets:
-
-```text
-/sap/bc/adt/core/http/sessions/{security_context_reference}
-```
-
-The child resource only implements `DELETE`, but deleting it through the same
-security session is intentionally a no-op. `CL_ADT_RES_HTTP_SESSION->DELETE`
-compares the URI reference with the current request's security context and only
-calls `CL_HTTP_SECURITY_SESSION_ADMIN=>TERMINATE_OLD_OWN_SESSION` when they
-differ. It is therefore an old-session cleanup mechanism invoked from a newer
-security session. The separately advertised `/sap/public/bc/icf/logoff`
-resource logs off the current security session.
-
-The server-side handlers observed on A4H are:
-
-| Role | Handler |
-| --- | --- |
-| Registration | `CL_ADT_RES_HTTP_SESSION_APP->REGISTER_RESOURCES` |
-| Collection GET | `CL_ADT_RES_HTTP_SESSION_COLL->GET` |
-| Old-session DELETE | `CL_ADT_RES_HTTP_SESSION->DELETE` |
-
-This resource manages the HTTP security session represented by
-`SAP_SESSIONID_*`; it is unrelated to `UserSession::close()` and the
-`sap-contextid` ABAP user session.
-
-## Resource references
-
-Resource references separate validated ADT locations from the operations that
-act on them. A bare `ObjectRef` does not imply source, locking, update, or
-execution capabilities:
-
-| Type | Represents | Created from |
-| --- | --- | --- |
-| `ObjectRef` | A type-erased repository-object identity and location, without implied capabilities | An erased typed reference or a parsed ADT representation |
-| `ObjectRef<T>` | An object identity tagged with a static `ObjectType` marker | `Client<Ready>::object::<T>(name)` |
-| `SourceRef` | One source resource plus its owning object | An advertised source link or a source-capable reference such as `ObjectRef<Program>` |
-| `ObjectRef<Program>` | A typed ABAP program reference | `Client<Ready>::object::<Program>(name)` |
-| `ObjectRef<Include>` | A typed standalone-include reference | `Client<Ready>::object::<Include>(name)` |
-| `ObjectRef<Class>` | A typed ABAP class reference | `RepositoryObjectEntry::typed_reference::<Class>()` or `Client<Ready>::object::<Class>(name)` |
-| `ObjectRef<Package>` | A typed ABAP package reference | An embedded package reference or `Client<Ready>::object::<Package>(name)` |
-| `OwnedResourceRef<T>` | Shared owner and link metadata for a typed relation reference | Relation resolution |
-| `TextElementsRef`, `ObjectStructureRef`, and other relation references | Typed related resources plus their owning object | Fetched properties such as `ProgramProperties` |
-| `AdtLink` | A resolved Atom link retaining its relation, representation metadata, query, fragment, and SAP ETag | A fetched resource representation |
-
-Object-type markers describe identity and naming, while `ObjectCollection`
-provides the canonical discovery category only for types that can be resolved
-by name. This allows a ready client to construct typed references without
-type-specific methods:
-
+Nevertheless, `ZADT` still uses if on the off-chance it ever happens, which also improves compatibility
+going forward (and backwards). In simpler terms, this means when you create an object reference such as
 ```rust,ignore
 let program = client.object::<Program>("ZDEMO")?;
 ```
+The client checks the discovery collection for the stable `Program` schema and from there, determines 
+that its location is advertised as `/sap/bc/adt/programs/programs`. Another advantage is that supported
+media-types can be negotiated and chosen dynamically while remaining fully typed.
 
-Domain references expose only the conventions established for that resource
-type. Keeping the owning `ObjectRef` inside `SourceRef` lets the update builder
-reject a `LockHandle` obtained for a different object before any request is sent.
+Its worth noting that HATEOAS does not mean the client does not know about the semantics of resources.
+Operations and responsens remain fully typed. It mainly lets the provider change locations and 
+syntactic details of a resource, such as the uri parameter for a template action, without breaking
+clients relying on it.
 
-Class-local definitions, implementations, macros, and test classes are source
-components owned by the class, not independent repository objects. Resolve them
-with `ObjectRef<Class>::component_source(ClassSourceComponent)`; the resulting
-`SourceRef` retains the class identity required for locking and updates.
+### Typing
 
-## Program properties
+`ZADT` tries to provide full typing support and uses typestate pattern in various places to introduce
+invariants. For example, the current typing system makes it impossible to call a stateful operation
+without a stateful session context. It also provides convenient methods to navigate between objects
+and their relations. You can find more on the technical details down below.
 
-`ObjectRef<Program>::query()` defaults to V3 before V2. Callers can replace that order;
-the first preferred version advertised by central discovery is requested. V2
-and V3 use the same payload schema, exposed as `ProgramPropertiesV2` and
-`ProgramPropertiesV3` respectively (`ProgramPropertiesV2` is a type alias for
-`ProgramPropertiesV3`). The payload is wrapped in the corresponding
-`ProgramProperties::V2` or `ProgramProperties::V3` variant:
+However, the reality is that the nature of the ADT client rarely makes typing meaningful. More often
+than not, the kind of object youre working with comes from a command line or network request, at which
+point it becomes difficult to transiton back to a fully typed object in all contexts. You might be thinking
+that rust enums can come to the rescue here and I would agree, if ABAP did not have over one hundred
+repository objects to cover. For this reason, the library makes an effort to provide type erasure via a
+generic `RepositoryObject` trait that forward implements common operations such as locking or reading
+the object properties. Operations such as reading the source code then end up being runtime checks
+rather than failing at compile time. The downside is that operations that **return** object dependent
+types, such as `ProgramProperties` vs `ClassProperties` can not reflect their concrete type at all.
 
-```rust,ignore
-use zadt::{
-    ObjectVersion, Operation, Program, ProgramProperties, ProgramPropertiesVersion,
-};
+### Transport
 
-let reference = client.object::<Program>("ZDEMO")?;
-let response = reference
-    .query()
-    .priority([ProgramPropertiesVersion::V2, ProgramPropertiesVersion::V3])
-    .version(ObjectVersion::WorkingArea)
-    .execute(&client)
-    .await?;
-println!("media version: {:?}", response.media_version());
+The transport layer can be conveniently abstracted away as, regardless of the protocol used, ADT wraps
+the request and response in a HTTP-like structure anyways. RFC only ends up being a tunnel to transport
+that data to and from the server. For this reason, `ZADT` supports custom, protocol agnostic transport
+implementations. Currently only, HTTP transport using `reqwest` is implemented out of the box.
 
-let properties = match response {
-    ProgramProperties::V2(properties) | ProgramProperties::V3(properties) => properties,
-    _ => panic!("unsupported program-properties version"),
-};
-let source = properties.source.query().execute(&client).await?;
 
-assert_eq!(properties.package.name, "$TMP");
-assert_eq!(properties.syntax_configuration.language.version, "X");
-println!("text elements: {:?}", properties.text_elements()?);
-println!("{}", source.content);
-```
+### Techical details
 
-An unconditional query returns `ProgramProperties` directly. Calling
-`.if_none_match(cached_etag)` changes the query mode and its response type to
-`Conditional<ProgramProperties>`. A current ETag produces
-`Conditional::NotModified { etag }`; a changed descriptor produces
-`Conditional::Modified(representation)`. An unsolicited `304 Not Modified` is
-rejected when no validator was supplied. HTTP response ETags are stored as
-validated `EntityTag` values, so passing a fetched ETag to `.if_none_match()`
-cannot fail during request construction. External strings can be validated with
-`value.parse::<EntityTag>()`.
+This is more of a flex about how awesome rust is and, unless you plan to contribute, can probably be
+ignored.
 
-The optional version is typed as `ObjectVersion` and serializes to `active`,
-`inactive`, `workingArea`, `new`, or `partlyActive`. These values come directly
-from `IF_ADT_URI_QUERY_PARAMETERS`. `CL_SEDI_ADT_RES_SOURCE->GET` reads the
-parameter and `CL_ADT_UTILITY->GET_WB_VERSION` maps it to the Workbench's
-one-character `R3STATE`. Transient requests such as `WorkingArea` can therefore
-produce a returned `ProgramPropertiesV3::version` of `Active` or `Inactive`.
-
-The private Atom parser retains advertised links without resolving every target
-up front. `ProgramPropertiesV3::relations()` and the nested
-`SyntaxLanguage::relations()` preserve unknown relations alongside `rel`, media
-type, title, language, length, query, fragment, and SAP ETag metadata. Their
-iterators resolve links on demand, while typed accessors produce `HtmlSourceRef`,
-`SourceVersionsRef`, `ObjectStructureRef`, `TextElementsRef`, enhancement
-references, `ObjectStateRef`, and `ParserRef`. The required plain-text
-`SourceRef` remains eagerly validated as part of the properties representation.
-Bare relative, explicit `./`, root-relative, and query-bearing hrefs are resolved
-against the fetched program while their paths remain validated beneath
-`/sap/bc`.
-`ObjectRef<Program>::source()` remains the direct conventional `source/main` reference;
-`ProgramPropertiesV3::source` is the location advertised by SAP.
-
-This conversion was verified against `Z_TEST` on the active A4H backend. V2
-and V3 returned byte-identical XML bodies for that program and distinct,
-correct response media types; a live `ProgramPropertiesQuery` successfully
-converted all relations listed above.
-
-## Program execution
-
-`ObjectRef<Program>::run()` executes a program through the `programrun` URI template
-advertised by central discovery and returns its rendered plain-text output:
+The most important trait in `ZADT` is arguably the `Operation` trait, defines as
 
 ```rust,ignore
-use zadt::{Operation, Program};
+pub trait Operation<S: ClientState>: Send + Sync {
+    type Response: Send;
+    type Kind: OperationKind;
 
-let program = client.object::<Program>("ZDEMO")?;
-let output = program.run().build()?.execute(&client).await?;
-println!("{}", output.content);
+    fn request(&self, client: &Client<S>) -> Result<AdtRequest, OperationError>;
+
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError>;
+}
 ```
 
-Program names are canonicalized to uppercase when their references are created.
-The operation is stateless, although its `POST` request still causes the HTTP
-transport to acquire a CSRF token. An optional profiler trace can be attached
-with `.profiler_id(id)` when the selected template advertises that variable.
-Selection-screen parameters are not supported by this endpoint.
-
-## Include properties
-
-Standalone ABAP includes share the programs discovery scheme but use their own
-collection and V2 representation. Resolution and media negotiation follow the
-same split as programs:
-
+An operation is effectively a request which its implementor can construct in the `request` method.
+It is generic over the client state: 
 ```rust,ignore
-use zadt::{Include, IncludeProperties, ObjectVersion, Operation};
-
-let reference = client.object::<Include>("ZINCLUDE")?;
-let response = reference
-    .query()
-    .version(ObjectVersion::Active)
-    .execute(&client)
-    .await?;
-let properties = match response {
-    IncludeProperties::V2(properties) => properties,
-    _ => panic!("unsupported include-properties version"),
-};
-let source = properties.source.query().execute(&client).await?;
-println!("{}", source.content);
+impl ClientState for Initial {}
+impl ClientState for Ready {}
 ```
-
-`IncludePropertiesV2` retains its optional using-object context, package, source
-relations, enhancement relations, and properties ETag. The implementation was
-verified against `ZTEST` on the active A4H backend. `IncludePropertiesQuery`
-supports the same `.if_none_match(etag)` transition and `Conditional` response
-as program properties. Both public query names specialize the generic
-`ObjectPropertiesQuery`, which centralizes discovery lookup, media negotiation,
-object-version parameters, cache headers, and `200`/`304` handling.
-
-## Object editing
-
-Object locking and source updates are generic stateful operations. A
-`ObjectRef<Program>` resolves its object and source resources from central discovery:
-
+... and the operation kind:
 ```rust,ignore
-use zadt::{AccessMode, Operation, Program};
-
-let session = client.create_user_session();
-let program = client.object::<Program>("ZDEMO")?;
-let lock_handle = program
-    .lock(AccessMode::Modify)
-    .execute(&session)
-    .await?;
-
-program
-    .source()
-    .update()
-    .lock_handle(lock_handle.clone())
-    .content("REPORT zdemo.\n")
-    .build()?
-    .execute(&session)
-    .await?;
-
-program.unlock(lock_handle)?.execute(&session).await?;
-session.close().await?;
+impl OperationKind for Stateless {}
+impl OperationKind for Stateful {}
 ```
 
-When the owning resource is not otherwise needed, the equivalent lock-owned
-form is `lock_handle.remove().execute(&session).await?`.
+With that in place, an executor can be defined as
+```rust,ignore
+pub trait Executor<S, O>: Send + Sync
+where
+    S: ClientState,
+    O: Operation<S>,
+{
+    fn execute(
+        &self,
+        operation: &O,
+    ) -> impl Future<Output = Result<O::Response, OperationError>> + Send;
+}
+```
+which effectively means that a `Client` with state `S` can execute operations for state `S`.
+That means, an operation implementation
+```rust,ignore
+impl Operation<Ready> for ProgramRun { ... }
+```
+Cannot be invoked by `Client<Initial>`. This provides a compile time invariant for operations
+that rely on the discovery data to dispatch. Of course, entry point operations such as the 
+discovery itself, are valid for any client state.
 
-`ObjectRef<Program>::lock()` constructs a `LockRequest`, while
-`SourceRef::update()` seeds an `ObjectSourceUpdateBuilder` with its validated
-source. `ObjectLock` parses SAP's opaque `LOCK_HANDLE` into a `LockHandle`; the
-update builder rejects a handle obtained for another object. Future domain
-references can expose the same protocol operations when their ADT resource
-profiles establish the corresponding capabilities.
+The associated type `Kind` enforces the next invariant: calling stateful operations 
+outside of a stateful context. They **look** like they work, but they dont! For instance,
+locking gives you a handle back, but that handle already expired by the time you got that response.
 
-The `UserSession` serializes both calls and carries the `sap-contextid` returned
-by the lock response into the update request.
+So, we need to create a user session that wraps a client first
+```rust,ignore
+pub struct UserSession<S: ClientState> {
+    client: Client<S>,
+    state: Mutex<UserSessionState>,
+}
+```
+Then, implement the stateless executor only for `UserSession<S>`:
+```rust,ignore
+impl<S, O> Executor<S, O> for UserSession<S>
+where
+    S: ClientState,
+    O: Operation<S, Kind = Stateful>,
+{
+    async fn execute(&self, operation: &O) -> Result<O::Response, OperationError> {
+        ...
+    }
+}
+```
+Of course, once again, stateless operations can just dispatched by any executor.
 
-The active development-handler diagnostics map both operations to
-`CL_SEDI_ADT_RES_PROGRAM`: method `POST` handles the lock and method `PUT`
-handles the source update. The routes are registered by
-`CL_SEDI_ADT_RES_APP_PROGRAMS->REGISTER_RESOURCES`. These class names are
-implementation details and are not part of the client contract.
-
-The complete workflow is covered by a mock HTTP test and has also been verified
-against the active SAP backend with `Z_TEST`: the client fetched its source,
-locked it, appended a test comment, updated it, unlocked it, and closed the
-user session. The updated source was fetched again to verify the change. The
-HTTP transport acquires and caches a CSRF token before mutating requests. Retry
-after a stale CSRF token is not implemented.
+The best part about this design is that it allows us to build some sweet decorators
+around the operation trait, because the decorator can easily implement the trait
+itself to forward behavior. This drives batching, paging and etag handling. More 
+on that when I feel like it :D
