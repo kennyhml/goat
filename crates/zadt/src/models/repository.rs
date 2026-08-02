@@ -148,7 +148,7 @@ impl RepositoryPreselection {
     ///
     /// The leading `..` is RIS protocol syntax and does not denote filesystem
     /// parent traversal.
-    pub fn direct_package(package: impl Into<String>) -> Self {
+    pub fn directly_assigned(package: impl Into<String>) -> Self {
         let package = package.into();
         let package = package.strip_prefix("..").unwrap_or(&package);
         Self::new(RepositoryFacet::PACKAGE, format!("..{package}"))
@@ -230,8 +230,16 @@ impl RepositoryVirtualFolder {
     }
 
     /// Creates the filter selecting this folder in a subsequent hierarchy query.
-    pub fn preselection(&self) -> RepositoryPreselection {
+    pub fn as_preselection(&self) -> RepositoryPreselection {
         RepositoryPreselection::new(self.facet.clone(), self.name.clone())
+    }
+
+    pub fn name_or_technical_name(&self) -> &str {
+        if self.display_name.is_empty() {
+            &self.name
+        } else {
+            &self.display_name
+        }
     }
 }
 
@@ -707,7 +715,7 @@ mod tests {
     #[test]
     fn creates_direct_package_preselections() {
         for package in ["/DMO/FLIGHT", "ZPACKAGE", "$TMP", "../DMO/FLIGHT"] {
-            let selection = RepositoryPreselection::direct_package(package);
+            let selection = RepositoryPreselection::directly_assigned(package);
 
             assert_eq!(selection.facet(), &RepositoryFacet::PACKAGE);
             assert_eq!(
@@ -734,7 +742,7 @@ mod tests {
         assert!(!content.folders[0].is_direct_assignment());
         assert_eq!(content.folders[0].relations().len(), 1);
         assert_eq!(
-            content.folders[0].preselection().values(),
+            content.folders[0].as_preselection().values(),
             ["SOURCE_LIBRARY"]
         );
         assert_eq!(content.objects[0].name, "ZCL_DEMO");

@@ -114,7 +114,7 @@ impl Mount {
 ///
 /// let mount = Mount::selection(
 ///     "Local Objects ($TMP)",
-///     [RepositoryPreselection::direct_package("$TMP")],
+///     [RepositoryPreselection::directly_assigned("$TMP")],
 /// )
 /// .facet_policy(FacetPolicy::new([
 ///     FacetLevel::always(RepositoryFacet::OWNER),

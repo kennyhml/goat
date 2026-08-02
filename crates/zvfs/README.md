@@ -50,11 +50,11 @@ A local-objects mount can be constructed like this:
 
 ```rust,no_run
 use zadt::{Client, Ready, RepositoryFacet, RepositoryPreselection};
-use zvfs::{FacetLevel, FacetPolicy, Mount, VirtualRepositoryTree};
+use zvfs::{FacetLevel, FacetPolicy, Mount, VfsError, VirtualRepositoryTree};
 
-fn local_objects_tree(client: Client<Ready>) -> VirtualRepositoryTree {
+async fn local_objects_tree(client: Client<Ready>) -> Result<VirtualRepositoryTree, VfsError> {
     let preselections = [
-        RepositoryPreselection::direct_package("$TMP"),
+        RepositoryPreselection::directly_assigned("$TMP"),
         RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER"),
     ];
 
@@ -69,6 +69,7 @@ fn local_objects_tree(client: Client<Ready>) -> VirtualRepositoryTree {
             ),
         )
         .build()
+        .await
 }
 ```
 
@@ -78,7 +79,7 @@ To include another owner's local objects, add that owner to the same preselectio
 use zadt::{RepositoryFacet, RepositoryPreselection};
 
 let preselections = [
-    RepositoryPreselection::direct_package("$TMP"),
+    RepositoryPreselection::directly_assigned("$TMP"),
     RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER").include("JONDOE"),
 ];
 ```
@@ -146,6 +147,10 @@ are reevaluated when a node is refreshed.
 
 ## Technical Details
 
+Building a tree performs one RIS facet-catalog request. The builder validates
+that every configured policy facet is advertised for structuring and retains
+the catalog for hierarchy-aware refresh decisions.
+
 The tree loads each directory lazily. The graph lock is held only while reading
 or mutating in-memory records and is never held across an ADT request. A
 node-local asynchronous lock deduplicates concurrent loads of the same node
@@ -156,5 +161,5 @@ numeric index. Live records are stored in a `HashMap` keyed by that index.
 Removed IDs remain stale and cannot resolve to newly inserted nodes.
 
 `zvfs` models repository hierarchy only. Repository objects are leaves in this
-tree. source retrieval, editing, persistence, and local-file projection belong
+tree. Source retrieval, editing, persistence, and local-file projection belong
 to higher layers.

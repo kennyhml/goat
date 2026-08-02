@@ -1,5 +1,5 @@
 use thiserror::Error;
-use zadt::{OperationError, RepositoryContentQueryBuilderError};
+use zadt::{OperationError, RepositoryContentQueryBuilderError, RepositoryFacet};
 
 use crate::NodeId;
 
@@ -12,6 +12,12 @@ pub enum VfsError {
 
     #[error(transparent)]
     QueryBuilder(#[from] RepositoryContentQueryBuilderError),
+
+    #[error("repository facet `{0}` is not advertised by RIS")]
+    UnsupportedFacet(RepositoryFacet),
+
+    #[error("repository facet `{0}` cannot structure RIS results")]
+    UnstructuredFacet(RepositoryFacet),
 
     #[error("unknown VFS node {0:?}")]
     UnknownNode(NodeId),

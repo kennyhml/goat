@@ -18,6 +18,23 @@ use zvfs::{FacetLevel, FacetPolicy, Mount, NodeId, NodeKind, VfsError, VirtualRe
 
 const DISCOVERY_XML: &str = include_str!("../../zadt/tests/fixtures/discovery.xml");
 
+const FACETS_XML: &str = r#"
+    <vf:facets xmlns:vf="http://www.sap.com/adt/ris/facets">
+        <vf:facet key="package" displayName="Package" description="Package"
+            isHierarchical="true" isForFiltering="true" isForStructuring="true" />
+        <vf:facet key="appl" displayName="Application Component" description="Application Component"
+            isHierarchical="true" isForFiltering="true" isForStructuring="true" />
+        <vf:facet key="owner" displayName="Owner" description="Owner"
+            isHierarchical="false" isForFiltering="true" isForStructuring="true" />
+        <vf:facet key="group" displayName="Group" description="Group"
+            isHierarchical="false" isForFiltering="true" isForStructuring="true" />
+        <vf:facet key="type" displayName="Type" description="Type"
+            isHierarchical="false" isForFiltering="true" isForStructuring="true" />
+        <vf:facet key="filter_only" displayName="Filter Only" description="Filter Only"
+            isHierarchical="false" isForFiltering="true" isForStructuring="false" />
+    </vf:facets>
+"#;
+
 const EMPTY_XML: &str = r#"
     <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
         objectCount="0" />
@@ -25,9 +42,10 @@ const EMPTY_XML: &str = r#"
 
 const CHILD_PACKAGES_XML: &str = r#"
     <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
-        objectCount="7">
-        <vfs:virtualFolder name="/ROOT" displayName="/ROOT" facet="PACKAGE"
-            counter="7" hasChildrenOfSameFacet="true" />
+        objectCount="9">
+        <vfs:preselectionInfo facet="PACKAGE" hasChildrenOfSameFacet="true" />
+        <vfs:virtualFolder name="../ROOT" displayName="../ROOT" facet="PACKAGE"
+            counter="2" hasChildrenOfSameFacet="false" />
         <vfs:virtualFolder name="/ROOT/CHILD" displayName="/ROOT/CHILD" facet="PACKAGE"
             counter="7" hasChildrenOfSameFacet="false" />
     </vfs:virtualFoldersResult>
@@ -89,6 +107,7 @@ struct TestTransport {
 #[derive(Default)]
 struct TransportState {
     requests: Mutex<Vec<String>>,
+    facet_count: AtomicUsize,
     post_count: AtomicUsize,
     active: AtomicUsize,
     max_active: AtomicUsize,
@@ -167,8 +186,7 @@ impl TestTransport {
                 1 => Ok(TYPE_XML
                     .replace("objectCount=\"12\"", "objectCount=\"30\"")
                     .replace("counter=\"12\"", "counter=\"30\"")),
-                2 => Ok(EMPTY_XML.replace("objectCount=\"0\"", "objectCount=\"3\"")),
-                3 => Ok(TYPE_XML
+                2 => Ok(TYPE_XML
                     .replace("objectCount=\"12\"", "objectCount=\"3\"")
                     .replace("counter=\"12\"", "counter=\"3\"")),
                 _ => Ok(OBJECT_XML.replace("objectCount=\"1\"", "objectCount=\"3\"")),
@@ -269,6 +287,12 @@ impl Transport for TestTransport {
     async fn send(&self, request: AdtRequest) -> Result<AdtResponse, TransportError> {
         if request.target().as_str() == "/sap/bc/adt/discovery" {
             return Ok(Self::response(DISCOVERY_XML.as_bytes().to_vec()));
+        }
+        if request.target().as_str()
+            == "/sap/bc/adt/repository/informationsystem/virtualfolders/facets"
+        {
+            self.state.facet_count.fetch_add(1, Ordering::SeqCst);
+            return Ok(Self::response(FACETS_XML.as_bytes().to_vec()));
         }
 
         let body = String::from_utf8_lossy(request.body()).into_owned();
@@ -375,11 +399,46 @@ fn successor(id: NodeId) -> NodeId {
 }
 
 #[tokio::test]
+async fn validates_facet_policies_while_building() {
+    let missing = RepositoryFacet::from("MISSING");
+    let (missing_client, state) = client(Behavior::SlowEmpty).await;
+    let result = VirtualRepositoryTree::builder(missing_client)
+        .mount(selection_mount("Missing").facet_policy(FacetPolicy::grouped([missing.clone()])))
+        .build()
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(VfsError::UnsupportedFacet(facet)) if facet == missing
+    ));
+    assert_eq!(state.facet_count.load(Ordering::SeqCst), 1);
+
+    let unstructured = RepositoryFacet::from("FILTER_ONLY");
+    let (unstructured_client, _) = client(Behavior::SlowEmpty).await;
+    let result = VirtualRepositoryTree::builder(unstructured_client)
+        .mount(
+            selection_mount("Unstructured")
+                .facet_policy(FacetPolicy::grouped([unstructured.clone()])),
+        )
+        .build()
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(VfsError::UnstructuredFacet(facet)) if facet == unstructured
+    ));
+}
+
+#[tokio::test]
 async fn traverses_packages_groups_types_and_objects() {
     let (client, state) = client(Behavior::Tree).await;
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(Mount::package("/ROOT"))
-        .build();
+        .build()
+        .await
+        .unwrap();
+
+    assert_eq!(state.facet_count.load(Ordering::SeqCst), 1);
 
     let mounts = vfs.children(vfs.root()).await.unwrap();
     assert_eq!(mounts.len(), 1);
@@ -446,7 +505,9 @@ async fn child_package_metadata_controls_hierarchy_queries() {
     let (client, state) = client(Behavior::Tree).await;
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(Mount::package("/ROOT").facet_policy(FacetPolicy::grouped([RepositoryFacet::OWNER])))
-        .build();
+        .build()
+        .await
+        .unwrap();
     let package = vfs.children(vfs.root()).await.unwrap().remove(0);
     let children = vfs.children(package.id).await.unwrap();
     let child_package = children
@@ -503,7 +564,9 @@ async fn adaptive_type_facets_skip_small_layers_and_keep_large_layers() {
                 FacetLevel::always(RepositoryFacet::GROUP),
                 FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
             ])))
-            .build();
+            .build()
+            .await
+            .unwrap();
         let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
         let group = vfs.children(mount.id).await.unwrap().remove(0);
 
@@ -525,7 +588,9 @@ async fn adaptive_facets_skip_only_their_own_level() {
                 FacetLevel::adaptive(RepositoryFacet::GROUP, 10),
                 FacetLevel::always(RepositoryFacet::TYPE),
             ])))
-            .build();
+            .build()
+            .await
+            .unwrap();
         let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
         let children = vfs.children(mount.id).await.unwrap();
@@ -557,7 +622,9 @@ async fn applies_facet_policies_independently_per_mount() {
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(group_mount)
         .mount(type_mount)
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mounts = vfs.children(vfs.root()).await.unwrap();
 
     let groups = vfs.children(mounts[0].id).await.unwrap();
@@ -580,7 +647,7 @@ async fn carries_mount_and_selected_facet_filters_through_every_expansion() {
     let mount = Mount::selection(
         "Local Favorites",
         [
-            RepositoryPreselection::direct_package("$TMP"),
+            RepositoryPreselection::directly_assigned("$TMP"),
             RepositoryPreselection::new(RepositoryFacet::OWNER, "DEVELOPER").include("ALICE"),
             RepositoryPreselection::new(RepositoryFacet::FAVORITES, "$DEVELOPER"),
         ],
@@ -590,7 +657,11 @@ async fn carries_mount_and_selected_facet_filters_through_every_expansion() {
         RepositoryFacet::GROUP,
         RepositoryFacet::TYPE,
     ]));
-    let vfs = VirtualRepositoryTree::builder(client).mount(mount).build();
+    let vfs = VirtualRepositoryTree::builder(client)
+        .mount(mount)
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
     let owner = vfs.children(mount.id).await.unwrap().remove(0);
@@ -629,7 +700,9 @@ async fn repeats_hierarchical_facets_before_advancing() {
                 RepositoryFacet::TYPE,
             ])),
         )
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
     let root_component = vfs.children(mount.id).await.unwrap().remove(0);
@@ -675,7 +748,9 @@ async fn adaptive_refresh_rechecks_the_current_object_count() {
             FacetLevel::always(RepositoryFacet::GROUP),
             FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
         ])))
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
     let group = vfs.children(mount.id).await.unwrap().remove(0);
     let old_type = vfs.children(group.id).await.unwrap().remove(0);
@@ -692,16 +767,14 @@ async fn adaptive_refresh_rechecks_the_current_object_count() {
         }
     ));
     let requests = state.requests.lock().unwrap();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 4);
     for request in requests.iter() {
         assert_preselection(request, "OWNER", &["DEVELOPER"]);
     }
     assert_preselection(&requests[2], "GROUP", &["SOURCE_LIBRARY"]);
-    assert_output_facet(&requests[2], Some("GROUP"));
+    assert_output_facet(&requests[2], Some("TYPE"));
     assert_preselection(&requests[3], "GROUP", &["SOURCE_LIBRARY"]);
-    assert_output_facet(&requests[3], Some("TYPE"));
-    assert_preselection(&requests[4], "GROUP", &["SOURCE_LIBRARY"]);
-    assert_output_facet(&requests[4], None);
+    assert_output_facet(&requests[3], None);
 }
 
 #[tokio::test]
@@ -712,7 +785,9 @@ async fn adaptive_refresh_can_skip_a_repeated_same_facet_level() {
             FacetLevel::adaptive(RepositoryFacet::APPLICATION_COMPONENT, 10),
             FacetLevel::always(RepositoryFacet::TYPE),
         ])))
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
     let root_component = vfs.children(mount.id).await.unwrap().remove(0);
     let old_leaf = vfs.children(root_component.id).await.unwrap().remove(0);
@@ -749,7 +824,9 @@ async fn scopes_loading_locks_to_individual_nodes() {
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("First"))
         .mount(flat_selection_mount("Second"))
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mounts = vfs.children(vfs.root()).await.unwrap();
 
     let (first, second) = tokio::join!(vfs.children(mounts[0].id), vfs.children(mounts[1].id));
@@ -765,7 +842,9 @@ async fn deduplicates_concurrent_loads_of_the_same_node() {
     let (client, state) = client(Behavior::SlowEmpty).await;
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("Objects"))
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
     let (first, second) = tokio::join!(vfs.children(mount.id), vfs.children(mount.id));
@@ -783,7 +862,9 @@ async fn ancestor_refresh_does_not_leave_orphans_from_a_descendant_load() {
         .mount(
             selection_mount("Objects").facet_policy(FacetPolicy::grouped([RepositoryFacet::GROUP])),
         )
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
     let descendant = vfs.children(mount.id).await.unwrap().remove(0);
 
@@ -813,7 +894,9 @@ async fn retries_failed_expansions_instead_of_caching_the_error() {
     let (client, state) = client(Behavior::FailOnce).await;
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("Objects"))
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
 
     assert!(vfs.children(mount.id).await.is_err());
@@ -826,7 +909,9 @@ async fn refresh_replaces_descendants_and_invalidates_old_ids() {
     let (client, _) = client(Behavior::Refresh).await;
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("Objects"))
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
     let first = vfs.children(mount.id).await.unwrap().remove(0);
 
@@ -846,7 +931,9 @@ async fn failed_refresh_preserves_the_cached_subtree() {
     let (client, _) = client(Behavior::FailRefresh).await;
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(flat_selection_mount("Objects"))
-        .build();
+        .build()
+        .await
+        .unwrap();
     let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
     let object = vfs.children(mount.id).await.unwrap().remove(0);
 
@@ -861,8 +948,14 @@ async fn failed_refresh_preserves_the_cached_subtree() {
 async fn rejects_node_ids_from_another_vfs_instance() {
     let (first_client, _) = client(Behavior::SlowEmpty).await;
     let (second_client, _) = client(Behavior::SlowEmpty).await;
-    let first = VirtualRepositoryTree::builder(first_client).build();
-    let second = VirtualRepositoryTree::builder(second_client).build();
+    let first = VirtualRepositoryTree::builder(first_client)
+        .build()
+        .await
+        .unwrap();
+    let second = VirtualRepositoryTree::builder(second_client)
+        .build()
+        .await
+        .unwrap();
 
     assert_ne!(first.root(), second.root());
     assert!(first.node(second.root()).is_none());
