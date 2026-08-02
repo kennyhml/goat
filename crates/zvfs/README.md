@@ -145,6 +145,42 @@ A4H
 Adaptive decisions are evaluated independently at each configured level and
 are reevaluated when a node is refreshed.
 
+## Example: Command line system explorer
+
+The crate includes a small, interactive explorer example for navigating a live system.
+It reads connection details from `.env` or the process environment:
+
+```text
+SAP_DESTINATION=https://example.test
+SAP_CLIENT=001
+SAP_USERNAME=DEVELOPER
+SAP_PASSWORD=secret
+SAP_LANGUAGE=EN
+```
+
+Without an argument, the explorer mounts the System Library. Pass a package
+name to start with a narrower package mount:
+
+```bash
+cargo run -p zvfs --example explorer
+cargo run -p zvfs --example explorer -- /DMO/FLIGHT_REUSE
+```
+
+The REPL loads nodes only as they are visited and supports:
+
+```text
+ls                 list current children
+cd <index>         enter a numbered directory
+cd .. | up         navigate to the parent
+pwd                print the current repository path
+info [index]       show current-node or child metadata
+refresh            refresh the current node
+tree               render loaded branches and collapse unopened packages
+help               show commands
+quit | exit        exit
+```
+This is only an example, it is neither polished nor meant to be used in productive environmens!
+
 ## Technical Details
 
 Building a tree performs one RIS facet-catalog request. The builder validates

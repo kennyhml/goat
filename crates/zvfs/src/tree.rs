@@ -247,6 +247,8 @@ impl NodeRecord {
 }
 
 /// Immutable mount configuration and the complete RIS filter path to one node.
+///
+/// The vector of preselections must be cloned per node.
 #[derive(Clone)]
 struct ExpansionContext {
     facet_policy: Arc<FacetPolicy>,
