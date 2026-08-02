@@ -1,13 +1,19 @@
 use std::future::Future;
 
 use async_lock::Mutex;
-use http::{HeaderMap, HeaderValue, header};
+use http::{HeaderMap, HeaderValue, StatusCode, header};
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::{
-    AdtRequest, AdtResponse, Client, ClientState, EntityTag, OperationError, ResponseError,
-    TransportError, target::CORE_DISCOVERY,
+    AdtRequest, AdtResponse, AdtUri, Client, ClientState, CompatibilityError, EntityTag,
+    OperationError, Ready, ResponseError, TransportError, target::CORE_DISCOVERY,
 };
+
+mod batch;
+mod conditional;
+
+pub use batch::{BatchError, BatchKey, BatchOperation, BatchResponses};
+pub use conditional::{Conditional, IfNoneMatch, QueryMode, Unconditional};
 
 const ADT_SESSION_TYPE: &str = "x-sap-adt-sessiontype";
 const STATEFUL_SESSION_TYPE: &str = "stateful";
@@ -47,6 +53,111 @@ impl private::Sealed for Stateful {}
 impl OperationKind for Stateless {}
 impl OperationKind for Stateful {}
 
+/// Local request metadata retained until an operation decodes its response.
+///
+/// Obtain this context from [`AdtRequest::operation_context`] before passing a
+/// request to a consuming transport. Most callers use the built-in executors,
+/// which preserve it automatically.
+#[derive(Clone, Debug)]
+pub struct OperationContext {
+    request_target: AdtUri,
+    related_request_targets: Box<[AdtUri]>,
+}
+
+impl OperationContext {
+    pub(crate) fn new(request_target: AdtUri, related_request_targets: Box<[AdtUri]>) -> Self {
+        Self {
+            request_target,
+            related_request_targets,
+        }
+    }
+
+    /// Returns the target of the originating request.
+    pub fn request_target(&self) -> &AdtUri {
+        &self.request_target
+    }
+
+    pub(crate) fn related_request_targets(&self) -> &[AdtUri] {
+        &self.related_request_targets
+    }
+}
+
+/// A raw ADT response paired with the context of the request that produced it.
+///
+/// The request target provides the base URI needed to resolve relative links in
+/// response representations. Keeping both values together also ensures that a
+/// batch decoder can pass each response part the target of its corresponding
+/// inner request.
+#[derive(Debug)]
+pub struct OperationResponse {
+    response: AdtResponse,
+    context: OperationContext,
+}
+
+impl OperationResponse {
+    /// Pairs a raw response with the target of its originating request.
+    pub fn new(response: AdtResponse, request_target: AdtUri) -> Self {
+        Self::with_context(
+            response,
+            OperationContext::new(request_target, Box::default()),
+        )
+    }
+
+    /// Pairs a raw response with context captured from its originating request.
+    pub fn with_context(response: AdtResponse, context: OperationContext) -> Self {
+        Self { response, context }
+    }
+
+    /// Returns the target of the request that produced this response.
+    pub fn request_target(&self) -> &AdtUri {
+        self.context.request_target()
+    }
+
+    /// Returns the local context captured from the originating request.
+    pub fn context(&self) -> &OperationContext {
+        &self.context
+    }
+
+    /// Returns the raw transport response.
+    pub fn response(&self) -> &AdtResponse {
+        &self.response
+    }
+
+    /// Returns the HTTP-like response status.
+    pub fn status(&self) -> StatusCode {
+        self.response.status()
+    }
+
+    /// Returns the response headers.
+    pub fn headers(&self) -> &HeaderMap {
+        self.response.headers()
+    }
+
+    /// Returns the response body.
+    pub fn body(&self) -> &[u8] {
+        self.response.body()
+    }
+
+    /// Returns the response entity tag when its header value is valid text.
+    pub fn entity_tag(&self) -> Option<EntityTag> {
+        self.response.entity_tag()
+    }
+
+    /// Consumes the response context and returns its body.
+    pub fn into_body(self) -> Vec<u8> {
+        self.response.into_body()
+    }
+
+    /// Consumes the response context and returns the raw response and request target.
+    pub fn into_parts(self) -> (AdtResponse, AdtUri) {
+        (self.response, self.context.request_target)
+    }
+
+    pub(crate) fn into_context_parts(self) -> (AdtResponse, OperationContext) {
+        (self.response, self.context)
+    }
+}
+
 /// A typed ADT operation possible only with client state `S`.
 ///
 /// ADT uses HTTP resource semantics, including methods such as `GET`, `POST`,
@@ -71,14 +182,7 @@ pub trait Operation<S: ClientState>: Send + Sync {
     fn request(&self, client: &Client<S>) -> Result<AdtRequest, OperationError>;
 
     /// Converts the raw transport response into this operation's response type.
-    ///
-    /// `request_target` is the target used for the request and can be used to
-    /// resolve relative links in the response.
-    fn decode(
-        &self,
-        response: AdtResponse,
-        request_target: &crate::AdtUri,
-    ) -> Result<Self::Response, ResponseError>;
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError>;
 
     /// Convenient forward of [`Executor::execute`] to the operation itself
     fn execute<E>(
@@ -152,9 +256,9 @@ where
 {
     async fn execute(&self, operation: &O) -> Result<O::Response, OperationError> {
         let request = operation.request(self)?;
-        let request_target = request.target().clone();
+        let context = request.operation_context();
         let response = self.transport().send(request).await?;
-        Ok(operation.decode(response, &request_target)?)
+        Ok(operation.decode(OperationResponse::with_context(response, context))?)
     }
 }
 
@@ -167,104 +271,11 @@ where
     async fn execute(&self, operation: &O) -> Result<O::Response, OperationError> {
         let mut session = self.state.lock().await;
         let mut request = operation.request(&self.client)?;
-        let request_target = request.target().clone();
         session.decorate(&mut request)?;
+        let context = request.operation_context();
         let response = self.client.transport().send(request).await?;
         session.update(response.headers());
-        Ok(operation.decode(response, &request_target)?)
-    }
-}
-
-/// The outcome of a request using a cache validator such as `If-None-Match`.
-#[derive(Clone, Debug)]
-pub enum Conditional<T> {
-    /// The resource changed and a new representation was returned.
-    Modified(T),
-
-    /// The supplied validator still identifies the current representation.
-    NotModified { etag: Option<EntityTag> },
-}
-
-impl<T> Conditional<T> {
-    /// Borrows the returned representation when the resource was modified.
-    pub fn as_modified(&self) -> Option<&T> {
-        match self {
-            Self::Modified(value) => Some(value),
-            Self::NotModified { .. } => None,
-        }
-    }
-
-    /// Consumes the outcome and returns the representation when modified.
-    pub fn into_modified(self) -> Option<T> {
-        match self {
-            Self::Modified(value) => Some(value),
-            Self::NotModified { .. } => None,
-        }
-    }
-
-    /// Returns the ETag supplied with a not-modified response.
-    pub fn not_modified_etag(&self) -> Option<&str> {
-        match self {
-            Self::Modified(_) => None,
-            Self::NotModified { etag } => etag.as_deref(),
-        }
-    }
-}
-
-/// Marker for a query without an HTTP cache validator.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Unconditional;
-
-/// Marker for a query carrying an `If-None-Match` validator.
-#[derive(Clone, Debug)]
-pub struct IfNoneMatch {
-    pub(crate) etag: EntityTag,
-}
-
-impl private::Sealed for Unconditional {}
-impl private::Sealed for IfNoneMatch {}
-
-/// Selects the response produced by a cache-aware query mode.
-///
-/// This trait is sealed; use a query's `if_none_match` method to change modes.
-#[doc(hidden)]
-pub trait QueryMode<V>: private::Sealed + Send + Sync {
-    type Response: Send;
-
-    fn if_none_match(&self) -> Option<&EntityTag>;
-    fn modified(&self, value: V) -> Self::Response;
-    fn not_modified(&self, etag: Option<EntityTag>) -> Option<Self::Response>;
-}
-
-impl<V: Send> QueryMode<V> for Unconditional {
-    type Response = V;
-
-    fn if_none_match(&self) -> Option<&EntityTag> {
-        None
-    }
-
-    fn modified(&self, value: V) -> Self::Response {
-        value
-    }
-
-    fn not_modified(&self, _etag: Option<EntityTag>) -> Option<Self::Response> {
-        None
-    }
-}
-
-impl<V: Send> QueryMode<V> for IfNoneMatch {
-    type Response = Conditional<V>;
-
-    fn if_none_match(&self) -> Option<&EntityTag> {
-        Some(&self.etag)
-    }
-
-    fn modified(&self, value: V) -> Self::Response {
-        Conditional::Modified(value)
-    }
-
-    fn not_modified(&self, etag: Option<EntityTag>) -> Option<Self::Response> {
-        Some(Conditional::NotModified { etag })
+        Ok(operation.decode(OperationResponse::with_context(response, context))?)
     }
 }
 
@@ -369,6 +380,13 @@ where
     }
 }
 
+impl UserSession<Ready> {
+    /// Creates an empty stateful batch bound to this user session's client.
+    pub fn batch(&self) -> Result<BatchOperation<Stateful>, CompatibilityError> {
+        BatchOperation::new(&self.client)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -385,7 +403,7 @@ mod tests {
     struct StatefulProbe;
 
     impl Operation<Initial> for StatefulProbe {
-        type Response = ();
+        type Response = AdtUri;
         type Kind = Stateful;
 
         fn request(&self, _client: &Client<Initial>) -> Result<AdtRequest, OperationError> {
@@ -395,13 +413,9 @@ mod tests {
             ))
         }
 
-        fn decode(
-            &self,
-            response: AdtResponse,
-            _request_target: &AdtUri,
-        ) -> Result<Self::Response, ResponseError> {
+        fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
             if response.status() == StatusCode::OK {
-                Ok(())
+                Ok(response.request_target().clone())
             } else {
                 Err(ResponseError::UnexpectedStatus {
                     status: response.status(),
@@ -431,6 +445,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn operation_response_retains_raw_response_and_request_target() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ETAG, HeaderValue::from_static("response-etag"));
+        let target = AdtUri::parse("/sap/bc/adt/test/resource").unwrap();
+        let response = OperationResponse::new(
+            AdtResponse::new(StatusCode::OK, headers, b"response".to_vec()),
+            target.clone(),
+        );
+
+        assert_eq!(response.request_target(), &target);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body(), b"response");
+        assert_eq!(response.entity_tag().as_deref(), Some("response-etag"));
+
+        let (raw, request_target) = response.into_parts();
+        assert_eq!(request_target, target);
+        assert_eq!(raw.body(), b"response");
+    }
+
     #[tokio::test]
     async fn user_session_is_owned_and_reuses_its_context_id() {
         let requests = Arc::new(StdMutex::new(Vec::new()));
@@ -450,8 +484,11 @@ mod tests {
 
         fn assert_static<T: 'static>(_value: &T) {}
         assert_static(&session);
-        StatefulProbe.execute(&session).await.unwrap();
-        StatefulProbe.execute(&session).await.unwrap();
+        let first_target = StatefulProbe.execute(&session).await.unwrap();
+        let second_target = StatefulProbe.execute(&session).await.unwrap();
+
+        assert_eq!(first_target.as_str(), "/sap/bc/adt/stateful-probe");
+        assert_eq!(second_target, first_target);
 
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 2);

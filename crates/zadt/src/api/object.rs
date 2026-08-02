@@ -6,7 +6,7 @@ use crate::{
     error::{ObjectError, OperationError, ResponseError},
     models::{AccessMode, LockHandle, SourceCode, parse_lock_handle},
     objects::{ObjectRef, ObjectType, Source},
-    operation::{Operation, Stateful, Stateless},
+    operation::{Operation, OperationResponse, Stateful, Stateless},
     protocol::{AdtRequest, AdtResponse},
     resource::SourceRef,
     vocabulary::{PostAction, media_type, query_parameter},
@@ -32,12 +32,8 @@ impl<S: ClientState> Operation<S> for ObjectSourceQuery {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &crate::AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        expect_ok(&response)?;
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        expect_ok(response.response())?;
         let etag = response.entity_tag();
         let content = String::from_utf8(response.into_body())
             .map_err(ObjectError::InvalidResponseEncoding)?;
@@ -119,12 +115,8 @@ impl<S: ClientState> Operation<S> for LockRequest {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &crate::AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        expect_ok(&response)?;
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        expect_ok(response.response())?;
         let handle = parse_lock_handle(response.body())?;
         Ok(LockHandle::new(self.object.clone(), handle))
     }
@@ -154,12 +146,8 @@ impl<S: ClientState> Operation<S> for UnlockRequest {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &crate::AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        expect_ok(&response)
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        expect_ok(response.response())
     }
 }
 
@@ -227,12 +215,8 @@ impl<S: ClientState> Operation<S> for ObjectSourceUpdate {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &crate::AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        expect_ok(&response)
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        expect_ok(response.response())
     }
 }
 

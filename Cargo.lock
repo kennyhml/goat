@@ -2610,6 +2610,7 @@ dependencies = [
  "cookie",
  "derive_builder",
  "http 1.4.2",
+ "httparse",
  "httpmock",
  "quick-xml",
  "reqwest",
@@ -2621,6 +2622,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -3,9 +3,9 @@ use http::{Method, StatusCode};
 
 use crate::{
     AdtRequest, AdtResponse, AdtUri, CategoryId, Client, ObjectRef, Operation, OperationError,
-    Ready, RepositoryContent, RepositoryFacet, RepositoryFacets, RepositoryObjectProperties,
-    RepositoryPreselection, ResponseError, Stateless, models::RepositoryContentRequest,
-    target::CollectionTarget, vocabulary::media_type,
+    OperationResponse, Ready, RepositoryContent, RepositoryFacet, RepositoryFacets,
+    RepositoryObjectProperties, RepositoryPreselection, ResponseError, Stateless,
+    models::RepositoryContentRequest, target::CollectionTarget, vocabulary::media_type,
 };
 
 /// Kind of repository content operation.
@@ -123,13 +123,9 @@ impl Operation<Ready> for RepositoryContentQuery {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        request_target: &AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        ensure_ok(&response)?;
-        RepositoryContent::parse(response.body(), request_target).map_err(Into::into)
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        ensure_ok(response.response())?;
+        RepositoryContent::parse(response.body(), response.request_target()).map_err(Into::into)
     }
 }
 
@@ -159,12 +155,8 @@ impl Operation<Ready> for RepositoryFacetsQuery {
         Self::TARGET.request(client, Method::GET)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        ensure_ok(&response)?;
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        ensure_ok(response.response())?;
         RepositoryFacets::parse(response.body()).map_err(Into::into)
     }
 }
@@ -235,12 +227,8 @@ impl Operation<Ready> for RepositoryObjectPropertiesQuery {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        ensure_ok(&response)?;
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        ensure_ok(response.response())?;
         RepositoryObjectProperties::parse(response.body(), &self.object_uri).map_err(Into::into)
     }
 }
@@ -310,8 +298,10 @@ mod tests {
     }
 
     fn ready_client(xml: &[u8]) -> Client<Ready> {
-        Client::new(UnusedTransport)
-            .with_capabilities(crate::models::parse_capabilities(xml).unwrap())
+        Client::new(UnusedTransport).with_capabilities(
+            crate::models::parse_capabilities(xml).unwrap(),
+            crate::models::parse_capabilities(xml).unwrap(),
+        )
     }
 
     #[test]
@@ -362,9 +352,11 @@ mod tests {
         let response = AdtResponse::new(StatusCode::OK, HeaderMap::new(), CONTENT_XML.to_vec());
         let request_target = AdtUri::parse("/sap/bc/adt/advertised/repository/contents").unwrap();
 
-        let content =
-            <RepositoryContentQuery as Operation<Ready>>::decode(&query, response, &request_target)
-                .unwrap();
+        let content = <RepositoryContentQuery as Operation<Ready>>::decode(
+            &query,
+            OperationResponse::new(response, request_target),
+        )
+        .unwrap();
 
         assert_eq!(content.object_count, 3);
         assert_eq!(content.folders.len(), 1);
@@ -416,8 +408,7 @@ mod tests {
         );
         let properties = <RepositoryObjectPropertiesQuery as Operation<Ready>>::decode(
             &query,
-            response,
-            request.target(),
+            OperationResponse::new(response, request.target().clone()),
         )
         .unwrap();
         assert_eq!(properties.object.reference.uri(), object.uri());

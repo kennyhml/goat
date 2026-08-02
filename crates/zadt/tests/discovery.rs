@@ -66,7 +66,9 @@ async fn core_discovery_is_available_before_central_discovery() {
 
 #[tokio::test]
 async fn client_discovery_transitions_and_retains_capabilities() {
-    let client = Client::new(FixtureTransport::new(DISCOVERY_XML));
+    let transport = FixtureTransport::new(DISCOVERY_XML);
+    let requests = Arc::clone(&transport.requests);
+    let client = Client::new(transport);
     Logon.execute(&client).await.unwrap();
     let client = client.discover().await.unwrap();
     let cloned_client = client.clone();
@@ -86,6 +88,27 @@ async fn client_discovery_transitions_and_retains_capabilities() {
         client.capabilities(),
         cloned_client.capabilities()
     ));
+    assert!(std::ptr::eq(
+        client.core_capabilities(),
+        cloned_client.core_capabilities()
+    ));
+    assert!(
+        client
+            .core_capabilities()
+            .collection(
+                "http://www.sap.com/adt/categories/system/communication/services",
+                "batch"
+            )
+            .is_some()
+    );
+    assert_eq!(
+        requests.lock().unwrap().as_slice(),
+        [
+            "/sap/bc/adt/core/http/sessions",
+            "/sap/bc/adt/discovery",
+            "/sap/bc/adt/core/discovery",
+        ]
+    );
 }
 
 #[tokio::test]
@@ -116,6 +139,18 @@ async fn reqwest_transport_sends_the_discovery_contract() {
                 .body(DISCOVERY_XML);
         })
         .await;
+    let core_discovery = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/core/discovery")
+                .header("accept", "application/atomsvc+xml")
+                .header("cookie", "sap-usercontext=sap-client=001&sap-language=EN")
+                .header("authorization", "Basic VVNFUjpQQVNTV09SRA==");
+            then.status(200)
+                .header("content-type", "application/atomsvc+xml")
+                .body(CORE_DISCOVERY_XML);
+        })
+        .await;
 
     let transport = ReqwestTransport::builder()
         .destination(server.base_url())
@@ -131,6 +166,7 @@ async fn reqwest_transport_sends_the_discovery_contract() {
 
     logon.assert_async().await;
     discovery.assert_async().await;
+    core_discovery.assert_async().await;
     assert!(
         client
             .capabilities()
@@ -169,6 +205,12 @@ async fn reqwest_transport_reuses_security_session_cookies() {
                 "SAP_SESSIONID_A4H_001=session; sap-usercontext=sap-client=001&sap-language=EN",
             );
             then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let _core_discovery = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/core/discovery");
+            then.status(200).body(CORE_DISCOVERY_XML);
         })
         .await;
     let transport = ReqwestTransport::builder()
@@ -274,10 +316,15 @@ impl Transport for FixtureTransport {
                 SESSION_XML.as_bytes().to_vec(),
             ));
         }
+        let response = if request.target().as_str() == "/sap/bc/adt/core/discovery" {
+            CORE_DISCOVERY_XML
+        } else {
+            self.response
+        };
         Ok(AdtResponse::new(
             StatusCode::OK,
             HeaderMap::new(),
-            self.response.as_bytes().to_vec(),
+            response.as_bytes().to_vec(),
         ))
     }
 }

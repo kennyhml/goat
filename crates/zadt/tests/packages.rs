@@ -8,6 +8,7 @@ use zadt::{
 };
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
+const CORE_DISCOVERY_XML: &str = include_str!("fixtures/core-discovery.xml");
 const PACKAGE_XML: &str = include_str!("fixtures/package-sadt-tools-core.xml");
 const SUPER_TREE_XML: &str = include_str!("fixtures/package-tree-super.xml");
 const SUB_TREE_XML: &str = include_str!("fixtures/package-tree-sub.xml");
@@ -35,6 +36,15 @@ async fn mock_discovery(server: &MockServer) -> Mock<'_> {
         .await
 }
 
+async fn mock_core_discovery(server: &MockServer) -> Mock<'_> {
+    server
+        .mock_async(|when, then| {
+            when.method(GET).path("/sap/bc/adt/core/discovery");
+            then.status(200).body(CORE_DISCOVERY_XML);
+        })
+        .await
+}
+
 async fn ready_client(server: &MockServer) -> Client<Ready> {
     let transport = ReqwestTransport::builder()
         .destination(server.base_url())
@@ -53,6 +63,7 @@ async fn package_properties_use_the_discovered_v2_contract() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
     let discovery = mock_discovery(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let properties = server
         .mock_async(|when, then| {
             when.method(GET)
@@ -93,6 +104,7 @@ async fn package_tree_queries_expand_the_discovered_template() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
     let discovery = mock_discovery(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let super_tree = server
         .mock_async(|when, then| {
             when.method(GET)
@@ -145,6 +157,7 @@ async fn package_settings_use_the_discovered_collection() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
     let discovery = mock_discovery(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let settings = server
         .mock_async(|when, then| {
             when.method(GET)

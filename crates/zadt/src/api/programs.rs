@@ -7,8 +7,8 @@ use crate::{
     error::{ObjectError, OperationError, ResponseError},
     models::ProgramRunResult,
     objects::{Include, ObjectRef, Program},
-    operation::{Operation, Stateless, Unconditional},
-    protocol::{AdtRequest, AdtResponse},
+    operation::{Operation, OperationResponse, Stateless, Unconditional},
+    protocol::AdtRequest,
     target::TemplateTarget,
     vocabulary::{PROGRAM_RUN, PROGRAM_RUN_RELATION, media_type, query_parameter},
 };
@@ -71,11 +71,7 @@ impl Operation<Ready> for ProgramRun {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
         if !response.status().is_success() {
             return Err(ResponseError::UnexpectedStatus {
                 status: response.status(),
@@ -215,8 +211,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        CompatibilityError, Conditional, EntityTag, IncludeProperties, IncludePropertyVersion,
-        NegotiableMediaVersion, ProgramProperties, ProgramPropertiesVersion, vocabulary::PROGRAMS,
+        AdtResponse, CompatibilityError, Conditional, EntityTag, IncludeProperties,
+        IncludePropertyVersion, NegotiableMediaVersion, ProgramProperties,
+        ProgramPropertiesVersion, vocabulary::PROGRAMS,
     };
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
@@ -231,8 +228,10 @@ mod tests {
     }
 
     fn ready_client(xml: &[u8]) -> Client<Ready> {
-        Client::new(UnusedTransport)
-            .with_capabilities(crate::models::parse_capabilities(xml).unwrap())
+        Client::new(UnusedTransport).with_capabilities(
+            crate::models::parse_capabilities(xml).unwrap(),
+            crate::models::parse_capabilities(xml).unwrap(),
+        )
     }
 
     fn program_properties_query() -> ProgramPropertiesQuery {
@@ -243,7 +242,7 @@ mod tests {
         .query()
     }
 
-    fn program_properties_response(representation: ProgramPropertiesVersion) -> AdtResponse {
+    fn program_properties_response(representation: ProgramPropertiesVersion) -> OperationResponse {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::CONTENT_TYPE,
@@ -251,7 +250,11 @@ mod tests {
                 .unwrap(),
         );
         headers.insert(header::ETAG, HeaderValue::from_static("program-etag"));
-        AdtResponse::new(StatusCode::OK, headers, PROGRAM_XML.as_bytes().to_vec())
+        operation_response(AdtResponse::new(
+            StatusCode::OK,
+            headers,
+            PROGRAM_XML.as_bytes().to_vec(),
+        ))
     }
 
     fn include_properties_query() -> IncludePropertiesQuery {
@@ -274,6 +277,10 @@ mod tests {
 
     fn request_target() -> AdtUri {
         AdtUri::parse("/sap/bc/adt/test").unwrap()
+    }
+
+    fn operation_response(response: AdtResponse) -> OperationResponse {
+        OperationResponse::new(response, request_target())
     }
 
     #[test]
@@ -332,7 +339,7 @@ mod tests {
     fn rejects_non_utf8_program_run_output() {
         let response = AdtResponse::new(StatusCode::OK, HeaderMap::new(), vec![0xff]);
         let error = program_run()
-            .decode(response, &request_target())
+            .decode(operation_response(response))
             .unwrap_err();
 
         assert!(matches!(
@@ -385,10 +392,7 @@ mod tests {
     #[test]
     fn tags_a_v2_program_properties_representation() {
         let representation = program_properties_query()
-            .decode(
-                program_properties_response(ProgramPropertiesVersion::V2),
-                &request_target(),
-            )
+            .decode(program_properties_response(ProgramPropertiesVersion::V2))
             .unwrap();
         assert!(matches!(representation, ProgramProperties::V2(_)));
     }
@@ -396,10 +400,7 @@ mod tests {
     #[test]
     fn tags_a_v3_program_properties_representation() {
         let representation = program_properties_query()
-            .decode(
-                program_properties_response(ProgramPropertiesVersion::V3),
-                &request_target(),
-            )
+            .decode(program_properties_response(ProgramPropertiesVersion::V3))
             .unwrap();
         assert!(matches!(representation, ProgramProperties::V3(_)));
     }
@@ -413,7 +414,7 @@ mod tests {
         );
 
         let error = program_properties_query()
-            .decode(response, &request_target())
+            .decode(operation_response(response))
             .unwrap_err();
 
         assert!(matches!(
@@ -432,7 +433,7 @@ mod tests {
         let response = AdtResponse::new(StatusCode::OK, headers, PROGRAM_XML.as_bytes().to_vec());
 
         let error = program_properties_query()
-            .decode(response, &request_target())
+            .decode(operation_response(response))
             .unwrap_err();
 
         assert!(matches!(
@@ -454,10 +455,7 @@ mod tests {
     fn wraps_a_modified_conditional_program_properties_query() {
         let response = program_properties_query()
             .if_none_match(EntityTag::from_static("old-etag"))
-            .decode(
-                program_properties_response(ProgramPropertiesVersion::V3),
-                &request_target(),
-            )
+            .decode(program_properties_response(ProgramPropertiesVersion::V3))
             .unwrap();
 
         assert!(matches!(
@@ -470,7 +468,7 @@ mod tests {
     fn rejects_not_modified_for_an_unconditional_program_properties_query() {
         let response = AdtResponse::new(StatusCode::NOT_MODIFIED, HeaderMap::new(), Vec::new());
         let error = program_properties_query()
-            .decode(response, &request_target())
+            .decode(operation_response(response))
             .unwrap_err();
 
         assert!(matches!(error, ResponseError::UnexpectedNotModified));
@@ -487,7 +485,7 @@ mod tests {
         let response = AdtResponse::new(StatusCode::OK, headers, INCLUDE_XML.as_bytes().to_vec());
 
         let representation = include_properties_query()
-            .decode(response, &request_target())
+            .decode(operation_response(response))
             .unwrap();
         assert!(matches!(representation, IncludeProperties::V2(_)));
         assert_eq!(representation.etag(), Some("include-etag"));
@@ -501,7 +499,7 @@ mod tests {
 
         let response = include_properties_query()
             .if_none_match(EntityTag::from_static("include-etag"))
-            .decode(response, &request_target())
+            .decode(operation_response(response))
             .unwrap();
         assert!(matches!(&response, Conditional::NotModified { .. }));
         assert_eq!(response.not_modified_etag(), Some("include-etag"));
@@ -512,7 +510,7 @@ mod tests {
     fn rejects_not_modified_for_an_unconditional_include_properties_query() {
         let response = AdtResponse::new(StatusCode::NOT_MODIFIED, HeaderMap::new(), Vec::new());
         let error = include_properties_query()
-            .decode(response, &request_target())
+            .decode(operation_response(response))
             .unwrap_err();
 
         assert!(matches!(error, ResponseError::UnexpectedNotModified));

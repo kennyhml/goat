@@ -4,7 +4,8 @@ use http::StatusCode;
 use thiserror::Error;
 
 use crate::{
-    AdtUriError, CategoryId, CompatibilityError, GlobalWorkbenchType, resource::AdtLinkError,
+    AdtUriError, BatchError, CategoryId, CompatibilityError, GlobalWorkbenchType,
+    resource::AdtLinkError,
 };
 
 #[cfg(feature = "reqwest")]
@@ -227,6 +228,9 @@ pub enum ResponseError {
     },
 
     #[error(transparent)]
+    Batch(#[from] BatchError),
+
+    #[error(transparent)]
     Discovery(#[from] DiscoveryError),
 
     #[error(transparent)]
@@ -244,6 +248,9 @@ pub enum ResponseError {
 pub enum OperationError {
     #[error(transparent)]
     Compatibility(#[from] CompatibilityError),
+
+    #[error(transparent)]
+    Batch(#[from] BatchError),
 
     #[error(transparent)]
     Transport(#[from] TransportError),

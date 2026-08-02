@@ -17,6 +17,7 @@ async-trait = "0.1.88"
 cookie = "0.18"
 derive_builder = "0.20"
 http = "1.3"
+httparse = "=1.10.1"
 quick-xml = { version = "0.38", optional = true }
 reqwest = { version = "0.12", features = ["cookies"], optional = true }
 secrecy = "0.10"
@@ -26,6 +27,7 @@ std-uritemplate = "2.0"
 thiserror = "2.0"
 tracing = { version = "0.1", default-features = false, features = ["std"], optional = true }
 url = "2.5"
+uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
 httpmock = "0.7"

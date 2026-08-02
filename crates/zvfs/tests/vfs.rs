@@ -17,6 +17,7 @@ use zadt::{
 use zvfs::{FacetLevel, FacetPolicy, Mount, NodeId, NodeKind, VfsError, VirtualRepositoryTree};
 
 const DISCOVERY_XML: &str = include_str!("../../zadt/tests/fixtures/discovery.xml");
+const CORE_DISCOVERY_XML: &str = include_str!("../../zadt/tests/fixtures/core-discovery.xml");
 
 const FACETS_XML: &str = r#"
     <vf:facets xmlns:vf="http://www.sap.com/adt/ris/facets">
@@ -364,6 +365,9 @@ impl Transport for TestTransport {
     async fn send(&self, request: AdtRequest) -> Result<AdtResponse, TransportError> {
         if request.target().as_str() == "/sap/bc/adt/discovery" {
             return Ok(Self::response(DISCOVERY_XML.as_bytes().to_vec()));
+        }
+        if request.target().as_str() == "/sap/bc/adt/core/discovery" {
+            return Ok(Self::response(CORE_DISCOVERY_XML.as_bytes().to_vec()));
         }
         if request.target().as_str()
             == "/sap/bc/adt/repository/informationsystem/virtualfolders/facets"

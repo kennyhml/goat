@@ -528,7 +528,7 @@ pub enum ProjectionError {
 #[cfg(test)]
 mod tests {
     use http::{HeaderMap, StatusCode};
-    use zadt::{AdtResponse, AdtUri, Operation, Ready, RepositoryContentQuery};
+    use zadt::{AdtResponse, AdtUri, Operation, OperationResponse, Ready, RepositoryContentQuery};
 
     use super::*;
 
@@ -545,8 +545,7 @@ mod tests {
                 .unwrap();
         let mut content = <RepositoryContentQuery as Operation<Ready>>::decode(
             &RepositoryContentQuery::new(),
-            response,
-            &target,
+            OperationResponse::new(response, target),
         )
         .unwrap();
         content.objects.pop().unwrap()

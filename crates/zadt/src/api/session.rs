@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use http::{HeaderValue, Method, StatusCode, header};
 
 use crate::{
-    AdtRequest, AdtResponse, AdtUri, Client, ClientState, LogonError, NegotiableMediaVersion,
-    Operation, OperationError, ResponseError, SessionInformation, Stateless,
+    AdtRequest, Client, ClientState, LogonError, NegotiableMediaVersion, Operation, OperationError,
+    OperationResponse, ResponseError, SessionInformation, Stateless,
     models::parse_session_information,
     target::HTTP_SESSIONS,
     vocabulary::{
@@ -60,11 +60,7 @@ impl<S: ClientState> Operation<S> for Logon {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
         if response.status() != StatusCode::OK {
             return Err(ResponseError::UnexpectedStatus {
                 status: response.status(),

@@ -10,6 +10,7 @@ const CONTENT_XML: &str = include_str!("fixtures/repository-content.xml");
 const FACETS_XML: &str = include_str!("fixtures/repository-facets.xml");
 const OBJECT_PROPERTIES_XML: &str = include_str!("fixtures/repository-object-properties.xml");
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
+const CORE_DISCOVERY_XML: &str = include_str!("fixtures/core-discovery.xml");
 
 #[tokio::test]
 async fn repository_queries_use_discovered_collections() {
@@ -18,6 +19,14 @@ async fn repository_queries_use_discovered_collections() {
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
             then.status(200).body(DISCOVERY_XML);
+        })
+        .await;
+    let _core_discovery = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/core/discovery")
+                .header("accept", "application/atomsvc+xml");
+            then.status(200).body(CORE_DISCOVERY_XML);
         })
         .await;
     let csrf = server

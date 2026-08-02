@@ -5,7 +5,7 @@ use http::{
     header::{self, InvalidHeaderValue},
 };
 
-use crate::AdtUri;
+use crate::{AdtUri, OperationContext};
 
 /// An entity tag validated for use as an HTTP header value.
 ///
@@ -104,6 +104,7 @@ pub struct AdtRequest {
     query: Vec<(String, String)>,
     headers: HeaderMap,
     body: Vec<u8>,
+    response_context_targets: Vec<AdtUri>,
 }
 
 impl AdtRequest {
@@ -114,6 +115,7 @@ impl AdtRequest {
             query: Vec::new(),
             headers: HeaderMap::new(),
             body: Vec::new(),
+            response_context_targets: Vec::new(),
         }
     }
 
@@ -172,6 +174,27 @@ impl AdtRequest {
 
     pub fn set_body(&mut self, body: impl Into<Vec<u8>>) {
         self.body = body.into();
+    }
+
+    /// Captures the local metadata needed to decode this requests response.
+    ///
+    /// Custom executors should retain this value before giving the request to a
+    /// transport, then use [`crate::OperationResponse::with_context`] when the
+    /// response arrives.
+    ///
+    /// This helps resolve relative links in responses that do not echo the
+    /// AdtUri of the requested resource. It also enables us to associate batch
+    /// requests with their request target based on their order, because the batch
+    /// response does not mention which uri the response is for.
+    pub fn operation_context(&self) -> OperationContext {
+        OperationContext::new(
+            self.target.clone(),
+            self.response_context_targets.clone().into_boxed_slice(),
+        )
+    }
+
+    pub(crate) fn set_response_context_targets(&mut self, targets: Vec<AdtUri>) {
+        self.response_context_targets = targets;
     }
 
     /// Consumes the request and returns its transport-level components.

@@ -6,8 +6,8 @@ use stduritemplate::Value;
 use super::properties::ObjectPropertiesQuery;
 use crate::{
     AdtUri, CategoryId, Client, ObjectCollection, ObjectError, ObjectRef, Operation,
-    OperationError, Package, PackageSettings, PackageTree, PackageTreeKind, Ready, ResponseError,
-    Stateless, Unconditional,
+    OperationError, OperationResponse, Package, PackageSettings, PackageTree, PackageTreeKind,
+    Ready, ResponseError, Stateless, Unconditional,
     protocol::{AdtRequest, AdtResponse},
     target::{CollectionTarget, TemplateTarget},
 };
@@ -57,13 +57,13 @@ impl Operation<Ready> for PackageTreeQuery {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        request_target: &AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        ensure_xml_response(&response, Package::CATEGORY, PACKAGE_TREE_MEDIA_TYPE)?;
-        PackageTree::parse(response.body(), request_target)
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        ensure_xml_response(
+            response.response(),
+            Package::CATEGORY,
+            PACKAGE_TREE_MEDIA_TYPE,
+        )?;
+        PackageTree::parse(response.body(), response.request_target())
     }
 }
 
@@ -81,12 +81,12 @@ impl Operation<Ready> for PackageSettingsQuery {
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
-        ensure_xml_response(&response, PACKAGE_SETTINGS, PACKAGE_SETTINGS_MEDIA_TYPE)?;
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        ensure_xml_response(
+            response.response(),
+            PACKAGE_SETTINGS,
+            PACKAGE_SETTINGS_MEDIA_TYPE,
+        )?;
         PackageSettings::parse(response.body())
     }
 }

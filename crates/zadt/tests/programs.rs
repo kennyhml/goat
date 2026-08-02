@@ -9,6 +9,7 @@ use zadt::{
 };
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
+const CORE_DISCOVERY_XML: &str = include_str!("fixtures/core-discovery.xml");
 const LOCK_XML: &str = include_str!("fixtures/object-lock.xml");
 // Captured from live A4H. Its V2 and V3 response bodies were byte-identical.
 const PROGRAM_XML: &str = include_str!("fixtures/program-z-test.xml");
@@ -29,6 +30,17 @@ async fn mock_logon(server: &MockServer) -> Mock<'_> {
         .await
 }
 
+async fn mock_core_discovery(server: &MockServer) -> Mock<'_> {
+    server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/sap/bc/adt/core/discovery")
+                .header("accept", "application/atomsvc+xml");
+            then.status(200).body(CORE_DISCOVERY_XML);
+        })
+        .await
+}
+
 async fn ready_client(transport: ReqwestTransport) -> Client<Ready> {
     let client = Client::new(transport);
     Logon.execute(&client).await.unwrap();
@@ -39,6 +51,7 @@ async fn ready_client(transport: ReqwestTransport) -> Client<Ready> {
 async fn program_run_uses_the_advertised_profiled_template() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
@@ -99,6 +112,7 @@ async fn program_run_uses_the_advertised_profiled_template() {
 async fn include_properties_query_converts_the_live_ztest_properties() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
@@ -173,6 +187,7 @@ async fn include_properties_query_converts_the_live_ztest_properties() {
 async fn program_properties_query_converts_the_live_z_test_v3_properties() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET)
@@ -345,6 +360,7 @@ async fn program_properties_query_converts_the_live_z_test_v3_properties() {
 async fn program_properties_query_honors_v2_first_priority() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
@@ -402,6 +418,7 @@ async fn program_properties_query_honors_v2_first_priority() {
 async fn program_properties_query_returns_not_modified_for_a_current_etag() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET).path("/sap/bc/adt/discovery");
@@ -454,6 +471,7 @@ async fn program_properties_query_returns_not_modified_for_a_current_etag() {
 async fn program_lock_and_update_share_one_user_session() {
     let server = MockServer::start_async().await;
     let logon = mock_logon(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
     let discovery = server
         .mock_async(|when, then| {
             when.method(GET)

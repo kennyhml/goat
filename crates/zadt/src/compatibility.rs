@@ -5,7 +5,7 @@
 
 use thiserror::Error;
 
-use crate::CategoryId;
+use crate::{CategoryId, Collection};
 
 /// An error establishing protocol compatibility with an ADT backend.
 #[derive(Debug, Error)]
@@ -35,6 +35,11 @@ pub trait NegotiableMediaVersion: Copy + Eq + Send + Sync + 'static {
 
     /// Returns the media-type essence identifying this version.
     fn media_type(self) -> &'static str;
+
+    /// Selects this client's preferred version accepted by a discovered collection.
+    fn negotiate(collection: &Collection) -> Result<Self, CompatibilityError> {
+        negotiate(Self::SUPPORTED, collection.accepted_media_types())
+    }
 
     /// Finds the supported version identified by a media type.
     fn from_media_type(media_type: &str) -> Option<Self> {

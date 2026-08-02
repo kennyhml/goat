@@ -183,7 +183,8 @@ fn body_for_log<'a>(
     }
 
     let xml = is_xml_media_type(content_type);
-    if !(xml || include_text && is_text_media_type(content_type)) {
+    let multipart = is_multipart_mixed(content_type);
+    if !(xml || multipart || include_text && is_text_media_type(content_type)) {
         return BodyLog::Unsupported;
     }
     if body.len() > max_bytes {
@@ -212,6 +213,10 @@ fn is_xml_media_type(content_type: &str) -> bool {
     media_type.eq_ignore_ascii_case("application/xml")
         || media_type.eq_ignore_ascii_case("text/xml")
         || ends_with_ignore_ascii_case(media_type, "+xml")
+}
+
+fn is_multipart_mixed(content_type: &str) -> bool {
+    base_media_type(content_type).eq_ignore_ascii_case("multipart/mixed")
 }
 
 fn is_text_media_type(content_type: &str) -> bool {
@@ -360,6 +365,21 @@ mod tests {
         assert!(matches!(
             body_for_log(body, "text/plain; charset=utf-8", 1024, false),
             BodyLog::Unsupported
+        ));
+    }
+
+    #[test]
+    fn logs_multipart_batch_requests_and_responses() {
+        let body = b"--batch_test\r\nContent-Type: application/http\r\n\r\nHTTP/1.1 200 OK\r\n\r\n--batch_test--";
+        let content_type = "Multipart/Mixed; boundary=batch_test";
+
+        assert!(matches!(
+            body_for_log(body, content_type, 1024, true),
+            BodyLog::Text(_)
+        ));
+        assert!(matches!(
+            body_for_log(body, content_type, 1024, false),
+            BodyLog::Text(_)
         ));
     }
 

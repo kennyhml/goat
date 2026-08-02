@@ -5,8 +5,8 @@ use crate::{
     compatibility::NegotiableMediaVersion,
     error::{OperationError, ResponseError},
     objects::{ObjectProperties, ObjectRef, ObjectVersion},
-    operation::{IfNoneMatch, Operation, QueryMode, Stateless, Unconditional},
-    protocol::{AdtRequest, AdtResponse, EntityTag},
+    operation::{IfNoneMatch, Operation, OperationResponse, QueryMode, Stateless, Unconditional},
+    protocol::{AdtRequest, EntityTag},
     target::CollectionTarget,
     vocabulary::query_parameter,
 };
@@ -97,11 +97,7 @@ where
         Ok(request)
     }
 
-    fn decode(
-        &self,
-        response: AdtResponse,
-        _request_target: &crate::AdtUri,
-    ) -> Result<Self::Response, ResponseError> {
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
         if response.status() == StatusCode::NOT_MODIFIED {
             return self
                 .mode

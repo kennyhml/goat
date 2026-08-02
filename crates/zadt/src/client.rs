@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{Capabilities, CategoryId, Collection, CompatibilityError, Transport, UserSession};
+use crate::{
+    BatchOperation, Capabilities, CategoryId, Collection, CompatibilityError, Stateless, Transport,
+    UserSession,
+};
 
 mod private {
     pub trait Sealed {}
@@ -18,13 +21,14 @@ pub trait ClientState: private::Sealed + Clone + Send + Sync {}
 #[derive(Clone, Debug, Default)]
 pub struct Initial;
 
-/// The client has loaded the server's central ADT capabilities.
+/// The client has loaded the server's central and core ADT capabilities.
 ///
 /// This state records only a local capability snapshot. It does not guarantee
 /// that authentication or the underlying transport remains alive.
 #[derive(Clone, Debug)]
 pub struct Ready {
     capabilities: Arc<Capabilities>,
+    core_capabilities: Arc<Capabilities>,
 }
 
 impl private::Sealed for Initial {}
@@ -58,20 +62,35 @@ impl Client<Initial> {
         }
     }
 
-    pub(crate) fn with_capabilities(self, capabilities: Capabilities) -> Client<Ready> {
+    pub(crate) fn with_capabilities(
+        self,
+        capabilities: Capabilities,
+        core_capabilities: Capabilities,
+    ) -> Client<Ready> {
         Client {
             transport: self.transport,
             state: Ready {
                 capabilities: Arc::new(capabilities),
+                core_capabilities: Arc::new(core_capabilities),
             },
         }
     }
 }
 
 impl Client<Ready> {
+    /// Creates an empty stateless batch using this client's core capabilities.
+    pub fn batch(&self) -> Result<BatchOperation<Stateless>, CompatibilityError> {
+        BatchOperation::new(self)
+    }
+
     /// Returns the capabilities advertised by ADT.
     pub fn capabilities(&self) -> &Capabilities {
         &self.state.capabilities
+    }
+
+    /// Returns the infrastructure capabilities advertised by core discovery.
+    pub fn core_capabilities(&self) -> &Capabilities {
+        &self.state.core_capabilities
     }
 
     /// Returns the collection advertised for a category identity.
@@ -85,6 +104,15 @@ impl Client<Ready> {
         category: CategoryId,
     ) -> Result<&Collection, CompatibilityError> {
         self.collection(category)
+            .ok_or(CompatibilityError::MissingCollection(category))
+    }
+
+    pub(crate) fn require_core_collection(
+        &self,
+        category: CategoryId,
+    ) -> Result<&Collection, CompatibilityError> {
+        self.core_capabilities()
+            .collection(category.scheme, category.term)
             .ok_or(CompatibilityError::MissingCollection(category))
     }
 }
