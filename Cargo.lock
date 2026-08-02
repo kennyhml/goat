@@ -2624,6 +2624,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zaff"
+version = "0.1.0"
+dependencies = [
+ "http 1.4.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "zadt",
+]
+
+[[package]]
 name = "zerofrom"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
