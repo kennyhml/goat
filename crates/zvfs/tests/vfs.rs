@@ -106,6 +106,9 @@ enum Behavior {
     FailOnce,
     FailRefresh,
     Refresh,
+    Reconcile,
+    ShapeChange,
+    CoalesceRefresh,
     AncestorRefreshRace,
 }
 
@@ -124,6 +127,8 @@ struct TransportState {
     max_active: AtomicUsize,
     descendant_started: Notify,
     release_descendant: Notify,
+    refresh_started: Notify,
+    release_refresh: Notify,
 }
 
 impl TestTransport {
@@ -289,6 +294,56 @@ impl TestTransport {
                     </vfs:virtualFoldersResult>"#
                 ))
             }
+            Behavior::Reconcile => {
+                let objects = if request_number == 0 {
+                    r#"<vfs:object name="Z_ALPHA" package="$TMP" type="PROG/P"
+                            uri="/sap/bc/adt/programs/programs/z_alpha" expandable="true" text="Old description" />
+                        <vfs:object name="Z_BETA" package="$TMP" type="PROG/P"
+                            uri="/sap/bc/adt/programs/programs/z_beta" expandable="true" />"#
+                } else {
+                    r#"<vfs:object name="Z_ALPHA" package="$TMP" type="PROG/P"
+                            uri="/sap/bc/adt/programs/programs/z_alpha" expandable="true" text="Updated description" />
+                        <vfs:object name="Z_GAMMA" package="$TMP" type="PROG/P"
+                            uri="/sap/bc/adt/programs/programs/z_gamma" expandable="true" />"#
+                };
+                Ok(format!(
+                    r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="2">
+                        {objects}
+                    </vfs:virtualFoldersResult>"#
+                ))
+            }
+            Behavior::ShapeChange => match request_number {
+                0 => Ok(r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="12">
+                        <vfs:virtualFolder name="ROOT_APPL" displayName="Root Component" facet="APPL"
+                            counter="12" hasChildrenOfSameFacet="false" />
+                    </vfs:virtualFoldersResult>"#
+                    .to_owned()),
+                1 => Ok(TYPE_XML.to_owned()),
+                2 => Ok(r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="3">
+                        <vfs:virtualFolder name="ROOT_APPL" displayName="Renamed Root Component" facet="APPL"
+                            counter="3" hasChildrenOfSameFacet="false" />
+                    </vfs:virtualFoldersResult>"#
+                    .to_owned()),
+                3 => Ok(r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="3">
+                        <vfs:virtualFolder name="CLAS" displayName="Classes" facet="TYPE"
+                            counter="3" hasChildrenOfSameFacet="false" />
+                    </vfs:virtualFoldersResult>"#
+                    .to_owned()),
+                _ => Ok(OBJECT_XML.to_owned()),
+            },
+            Behavior::CoalesceRefresh => {
+                let description = if request_number == 0 {
+                    "Initial"
+                } else {
+                    "Refreshed"
+                };
+                Ok(format!(
+                    r#"<vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders" objectCount="1">
+                        <vfs:object name="Z_REFRESH" package="$TMP" type="PROG/P"
+                            uri="/sap/bc/adt/programs/programs/z_refresh" expandable="true" text="{description}" />
+                    </vfs:virtualFoldersResult>"#
+                ))
+            }
             Behavior::AncestorRefreshRace => {
                 if body.contains("<vfs:facet>GROUP</vfs:facet>") {
                     Ok(GROUP_XML.to_owned())
@@ -334,6 +389,11 @@ impl Transport for TestTransport {
         {
             self.state.descendant_started.notify_one();
             self.state.release_descendant.notified().await;
+        }
+
+        if matches!(self.behavior, Behavior::CoalesceRefresh) && request_number == 1 {
+            self.state.refresh_started.notify_one();
+            self.state.release_refresh.notified().await;
         }
 
         let response = self
@@ -484,16 +544,24 @@ async fn traverses_packages_groups_types_and_objects() {
             if uri.as_str() == "/sap/bc/adt/packages/%2froot%2fchild"
     ));
 
+    let child_package = package_children
+        .iter()
+        .find(|node| node.label == "/ROOT/CHILD")
+        .unwrap()
+        .clone();
     let group = package_children
         .iter()
         .find(|node| node.label == "Source Code Library")
-        .unwrap();
+        .unwrap()
+        .clone();
     let types = vfs.children(group.id).await.unwrap();
     assert_eq!(types[0].label, "Classes");
+    let object_type = types[0].clone();
 
-    let objects = vfs.children(types[0].id).await.unwrap();
+    let objects = vfs.children(object_type.id).await.unwrap();
     assert_eq!(objects[0].label, "ZCL_DEMO");
     assert!(!objects[0].is_directory());
+    let object = objects[0].clone();
     assert_eq!(
         vfs.object_entry(objects[0].id)
             .unwrap()
@@ -521,6 +589,32 @@ async fn traverses_packages_groups_types_and_objects() {
     assert_eq!(
         vfs.render_tree(),
         "/\n└── /ROOT\n    ├── /ROOT/CHILD\n    └── Source Code Library\n        └── Classes\n            └── ZCL_DEMO"
+    );
+
+    let refreshed = vfs.refresh(mounts[0].id).await.unwrap();
+    assert_eq!(
+        refreshed
+            .iter()
+            .find(|node| node.label == "/ROOT/CHILD")
+            .unwrap()
+            .id,
+        child_package.id
+    );
+    assert_eq!(
+        refreshed
+            .iter()
+            .find(|node| node.label == "Source Code Library")
+            .unwrap()
+            .id,
+        group.id
+    );
+    assert_eq!(
+        vfs.cached_children(group.id).unwrap().unwrap()[0].id,
+        object_type.id
+    );
+    assert_eq!(
+        vfs.cached_children(object_type.id).unwrap().unwrap()[0].id,
+        object.id
     );
 
     let requests = state.requests.lock().unwrap();
@@ -905,7 +999,7 @@ async fn deduplicates_concurrent_loads_of_the_same_node() {
 }
 
 #[tokio::test]
-async fn ancestor_refresh_does_not_leave_orphans_from_a_descendant_load() {
+async fn ancestor_refresh_rejects_stale_load_for_a_retained_child() {
     let (client, state) = client(Behavior::AncestorRefreshRace).await;
     let vfs = VirtualRepositoryTree::builder(client)
         .mount(
@@ -928,10 +1022,12 @@ async fn ancestor_refresh_does_not_leave_orphans_from_a_descendant_load() {
     let (descendant_result, refreshed) = tokio::join!(descendant_load, ancestor_refresh);
     let replacement = refreshed.unwrap().remove(0);
 
+    assert_eq!(replacement.id, descendant.id);
     assert!(matches!(
         descendant_result,
         Err(VfsError::StaleNode(id)) if id == descendant.id
     ));
+    assert_eq!(vfs.cached_children(descendant.id).unwrap(), None);
     assert!(
         vfs.node(successor(replacement.id)).is_none(),
         "a stale descendant load inserted an orphan node"
@@ -973,6 +1069,112 @@ async fn refresh_replaces_descendants_and_invalidates_old_ids() {
         vfs.object_entry(first.id),
         Err(VfsError::UnknownNode(id)) if id == first.id
     ));
+}
+
+#[tokio::test]
+async fn refresh_reconciles_objects_by_uri_and_updates_metadata() {
+    let (client, _) = client(Behavior::Reconcile).await;
+    let vfs = VirtualRepositoryTree::builder(client)
+        .mount(flat_selection_mount("Objects"))
+        .build()
+        .await
+        .unwrap();
+    let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+    let original = vfs.children(mount.id).await.unwrap();
+    let alpha = original
+        .iter()
+        .find(|node| node.label == "Z_ALPHA")
+        .unwrap();
+    let beta = original.iter().find(|node| node.label == "Z_BETA").unwrap();
+
+    let refreshed = vfs.refresh(mount.id).await.unwrap();
+    let updated_alpha = refreshed
+        .iter()
+        .find(|node| node.label == "Z_ALPHA")
+        .unwrap();
+    let gamma = refreshed
+        .iter()
+        .find(|node| node.label == "Z_GAMMA")
+        .unwrap();
+
+    assert_eq!(updated_alpha.id, alpha.id);
+    assert_eq!(
+        updated_alpha.object().unwrap().description.as_deref(),
+        Some("Updated description")
+    );
+    assert_eq!(
+        vfs.object_entry(alpha.id).unwrap().description.as_deref(),
+        Some("Updated description")
+    );
+    assert!(vfs.node(beta.id).is_none());
+    assert_ne!(gamma.id, beta.id);
+}
+
+#[tokio::test]
+async fn refresh_invalidates_a_retained_childs_incompatible_cache() {
+    let (client, state) = client(Behavior::ShapeChange).await;
+    let vfs = VirtualRepositoryTree::builder(client)
+        .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
+            FacetLevel::always(RepositoryFacet::APPLICATION_COMPONENT),
+            FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
+        ])))
+        .build()
+        .await
+        .unwrap();
+    let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+    let component = vfs.children(mount.id).await.unwrap().remove(0);
+    let old_type = vfs.children(component.id).await.unwrap().remove(0);
+
+    let retained = vfs.refresh(mount.id).await.unwrap().remove(0);
+
+    assert_eq!(retained.id, component.id);
+    assert_eq!(retained.label, "Renamed Root Component");
+    assert!(matches!(
+        retained.kind,
+        NodeKind::Facet {
+            object_count: 3,
+            has_children_of_same_facet: false,
+            ..
+        }
+    ));
+    assert_eq!(vfs.cached_children(retained.id).unwrap(), None);
+    assert!(vfs.node(old_type.id).is_none());
+
+    let new_children = vfs.children(retained.id).await.unwrap();
+    assert_output_facet(&state.requests.lock().unwrap()[3], Some("TYPE"));
+    assert_eq!(state.post_count.load(Ordering::SeqCst), 5);
+    assert_eq!(new_children[0].label, "ZCL_DEMO");
+}
+
+#[tokio::test]
+async fn coalesces_overlapping_refreshes_of_the_same_node() {
+    let (client, state) = client(Behavior::CoalesceRefresh).await;
+    let vfs = VirtualRepositoryTree::builder(client)
+        .mount(flat_selection_mount("Objects"))
+        .build()
+        .await
+        .unwrap();
+    let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+    let original = vfs.children(mount.id).await.unwrap().remove(0);
+
+    let first_tree = vfs.clone();
+    let first = tokio::spawn(async move { first_tree.refresh(mount.id).await });
+    state.refresh_started.notified().await;
+
+    let second = vfs.refresh(mount.id);
+    tokio::pin!(second);
+    assert!(futures_util::poll!(&mut second).is_pending());
+    state.release_refresh.notify_one();
+
+    let first_result = first.await.unwrap().unwrap();
+    let second_result = second.await.unwrap();
+    assert_eq!(first_result, second_result);
+    assert_eq!(first_result[0].id, original.id);
+    assert_eq!(
+        first_result[0].object().unwrap().description.as_deref(),
+        Some("Refreshed")
+    );
+    assert_eq!(state.post_count.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

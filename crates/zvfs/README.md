@@ -189,14 +189,22 @@ the catalog for hierarchy-aware refresh decisions.
 
 The tree loads each directory lazily. The graph lock is held only while reading
 or mutating in-memory records and is never held across an ADT request. A
-node-local asynchronous lock deduplicates concurrent loads of the same node
-without preventing separate branches from loading concurrently.
+node-local asynchronous lock deduplicates concurrent first loads and coalesces
+overlapping explicit refreshes of the same node without preventing separate
+branches from loading concurrently.
 
 Each node receives a tree-scoped `NodeId` containing a UUID and a monotonic
 numeric index. Live records are stored in a `HashMap` keyed by that index.
 Removed IDs remain stale and cannot resolve to newly inserted nodes.
 Repository package and object locations are exposed as validated `AdtUri`
 values rather than unchecked strings.
+
+Refreshes reconcile one immediate layer by semantic identity: package and
+object nodes use their ADT resource URI, while facet folders use their facet
+and technical value. Matching children retain their IDs, load gates, and
+compatible cached descendants. Removed nodes and descendants whose expansion
+shape changed become stale. Per-record generations prevent requests started
+before an ancestor reconciliation from committing obsolete results.
 
 `zvfs` models repository hierarchy only. Repository objects are leaves in this
 tree. Source retrieval, editing, persistence, and local-file projection belong

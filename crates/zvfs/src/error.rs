@@ -25,10 +25,15 @@ pub enum VfsError {
     #[error("repository package folder `{0}` did not advertise a resource URI")]
     MissingPackageUri(String),
 
+    #[error(
+        "repository response contains duplicate child identity `{identity}` below VFS node {parent:?}"
+    )]
+    DuplicateChildIdentity { parent: NodeId, identity: String },
+
     #[error("unknown VFS node {0:?}")]
     UnknownNode(NodeId),
 
-    #[error("VFS node {0:?} became stale while it was loading")]
+    #[error("VFS node {0:?} changed or became stale while it was loading")]
     StaleNode(NodeId),
 
     #[error("VFS node {0:?} is not a directory")]
