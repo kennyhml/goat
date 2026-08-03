@@ -5,13 +5,13 @@
 //! [`BatchOperation`] preserves that order while [`BatchKey`] retains each
 //! operations concrete response type.
 
-use std::{any::Any, marker::PhantomData, sync::Arc};
+use std::{any::Any, future::Future, marker::PhantomData, sync::Arc};
 
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::{Operation, OperationKind};
+use super::{Executor, Operation, OperationKind, Stateful, Stateless, UserSession};
 use crate::{
     AdtRequest, AdtResponse, AdtUri, CategoryId, Client, CompatibilityError,
     NegotiableMediaVersion, OperationError, OperationResponse, Ready, ResponseError,
@@ -39,6 +39,49 @@ impl NegotiableMediaVersion for BatchMediaVersion {
         match self {
             Self::MultipartMixed => BATCH_MEDIA_TYPE,
         }
+    }
+}
+
+/// This is where things get a bit freaky at first glance. At the end of the day,
+/// this trait allows us to simply call `T.batch()` on any homogenous collection
+/// of [`Operation`] `T` that implements [`IntoIterator`] and get back a
+/// [`Vec<T::Response>`] where `result[n]` is the response for operation `self[n]`.
+///
+/// This does not work on arrays of boxed, type erased operations as there is no
+/// well defined return type.
+pub trait Batched<E> {
+    /// The response produced by each homogeneous operation.
+    type Response: Send;
+
+    /// Executes these operations through a context supporting their operation kind.
+    fn batched(
+        self,
+        executor: &E,
+    ) -> impl Future<Output = Result<Vec<Self::Response>, OperationError>> + Send
+    where
+        Self: Sized;
+}
+
+impl<I, E> Batched<E> for I
+where
+    I: IntoIterator + Send,
+    I::Item: Operation<Ready> + 'static,
+    <I::Item as Operation<Ready>>::Response: 'static,
+    E: CreateBatch<<I::Item as Operation<Ready>>::Kind>,
+{
+    type Response = <I::Item as Operation<Ready>>::Response;
+
+    async fn batched(self, executor: &E) -> Result<Vec<Self::Response>, OperationError> {
+        let mut batch = executor.create_batch()?;
+        let keys = self
+            .into_iter()
+            .map(|operation| batch.push(operation))
+            .collect::<Vec<_>>();
+
+        let mut responses = batch.execute(executor).await?;
+        keys.into_iter()
+            .map(|key| responses.take(key).map_err(Into::into))
+            .collect()
     }
 }
 
@@ -276,6 +319,29 @@ impl BatchResponses {
             .downcast::<R>()
             .map(|response| *response)
             .map_err(|_| BatchError::TypeMismatch { index: key.index })
+    }
+}
+
+/// An execution context that can construct and execute a batch of kind `K`.
+///
+/// This is needed so we can treat both, a [`UserSession`] and [`Client`] as
+/// capable of creating a batch for their associated statefulness.
+trait CreateBatch<K>: Executor<Ready, BatchOperation<K>>
+where
+    K: OperationKind,
+{
+    fn create_batch(&self) -> Result<BatchOperation<K>, CompatibilityError>;
+}
+
+impl CreateBatch<Stateless> for Client<Ready> {
+    fn create_batch(&self) -> Result<BatchOperation<Stateless>, CompatibilityError> {
+        Client::batch(self)
+    }
+}
+
+impl CreateBatch<Stateful> for UserSession<Ready> {
+    fn create_batch(&self) -> Result<BatchOperation<Stateful>, CompatibilityError> {
+        UserSession::batch(self)
     }
 }
 
@@ -753,6 +819,21 @@ mod tests {
         assert!(body.ends_with(&format!("--{boundary}--")));
     }
 
+    #[tokio::test]
+    async fn executes_homogeneous_operations_through_the_client() {
+        let (client, _) = fixture_client(vec![fixture_response(&[
+            ("first", StatusCode::OK),
+            ("second", StatusCode::OK),
+        ])]);
+
+        let responses = [TextOperation, TextOperation]
+            .batched(&client)
+            .await
+            .unwrap();
+
+        assert_eq!(responses, ["first", "second"]);
+    }
+
     #[test]
     fn encodes_the_sap_application_http_contract() {
         let mut get = AdtRequest::new(Method::GET, AdtUri::parse("/sap/bc/adt/test/read").unwrap());
@@ -886,6 +967,29 @@ content-type:application/xml\r\n\r\n\
             "sap-contextid=batch-context"
         );
         assert!(!String::from_utf8_lossy(requests[1].body()).contains("sap-contextid"));
+    }
+
+    #[tokio::test]
+    async fn executes_homogeneous_operations_through_a_user_session() {
+        let (client, requests) = fixture_client(vec![fixture_response(&[
+            ("first", StatusCode::OK),
+            ("second", StatusCode::OK),
+        ])]);
+        let session = client.create_user_session();
+
+        let responses = vec![StatefulTextOperation, StatefulTextOperation]
+            .batched(&session)
+            .await
+            .unwrap();
+
+        assert_eq!(responses, ["first", "second"]);
+        assert_eq!(
+            requests.lock().unwrap()[0]
+                .headers()
+                .get(super::super::ADT_SESSION_TYPE)
+                .unwrap(),
+            "stateful"
+        );
     }
 
     #[test]

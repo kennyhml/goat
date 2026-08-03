@@ -12,7 +12,7 @@ use crate::{
 mod batch;
 mod conditional;
 
-pub use batch::{BatchError, BatchKey, BatchOperation, BatchResponses};
+pub use batch::{BatchError, BatchKey, BatchOperation, BatchResponses, Batched};
 pub use conditional::{Conditional, IfNoneMatch, QueryMode, Unconditional};
 
 const ADT_SESSION_TYPE: &str = "x-sap-adt-sessiontype";

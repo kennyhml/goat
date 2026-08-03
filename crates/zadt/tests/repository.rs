@@ -47,6 +47,10 @@ async fn repository_queries_use_discovered_collections() {
                     "content-type",
                     "application/vnd.sap.adt.repository.virtualfolders.request.v1+xml",
                 )
+                .header(
+                    "accept",
+                    "application/vnd.sap.adt.repository.virtualfolders.result.v1+xml",
+                )
                 .header("x-csrf-token", "CSRF-TOKEN-RIS")
                 .body_contains("objectSearchPattern=\"Z*\"")
                 .body_contains("<vfs:preselection facet=\"PACKAGE\">")

@@ -118,6 +118,7 @@ impl Operation<Ready> for RepositoryContentQuery {
         if let Some(operation) = self.operation {
             request.push_query("operation", operation.as_str());
         }
+        request.set_accept(media_type::REPOSITORY_CONTENT_RESULT);
         request.set_content_type(media_type::REPOSITORY_CONTENT_REQUEST);
         request.set_body(body);
         Ok(request)
@@ -338,6 +339,10 @@ mod tests {
         assert_eq!(
             request.headers().get(header::CONTENT_TYPE).unwrap(),
             media_type::REPOSITORY_CONTENT_REQUEST
+        );
+        assert_eq!(
+            request.headers().get(header::ACCEPT).unwrap(),
+            media_type::REPOSITORY_CONTENT_RESULT
         );
         assert!(body.contains("xmlns:vfs=\"http://www.sap.com/adt/ris/virtualFolders\""));
         assert!(body.contains("objectSearchPattern=\"Z*\""));

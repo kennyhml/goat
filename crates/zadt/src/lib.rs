@@ -59,9 +59,9 @@ pub use objects::{
     Package, Program, RepositoryObject, Source,
 };
 pub use operation::{
-    BatchError, BatchKey, BatchOperation, BatchResponses, Conditional, Executor, IfNoneMatch,
-    Operation, OperationContext, OperationKind, OperationResponse, QueryMode, Stateful, Stateless,
-    Unconditional, UserSession,
+    BatchError, BatchKey, BatchOperation, BatchResponses, Batched, Conditional, Executor,
+    IfNoneMatch, Operation, OperationContext, OperationKind, OperationResponse, QueryMode,
+    Stateful, Stateless, Unconditional, UserSession,
 };
 pub use protocol::{AdtRequest, AdtResponse, EntityTag};
 pub use resource::{
