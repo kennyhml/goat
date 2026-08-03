@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use http::{HeaderMap, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode, header};
 use tokio::sync::Notify;
 use zadt::{
     AdtRequest, AdtResponse, Client, Package, RepositoryFacet, RepositoryPreselection, Transport,
@@ -70,6 +70,16 @@ const GROUP_XML: &str = r#"
     </vfs:virtualFoldersResult>
 "#;
 
+const GROUPS_XML: &str = r#"
+    <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
+        objectCount="15">
+        <vfs:virtualFolder name="SOURCE_LIBRARY" displayName="Source Code Library" facet="GROUP"
+            counter="12" hasChildrenOfSameFacet="false" />
+        <vfs:virtualFolder name="DICTIONARY" displayName="Dictionary" facet="GROUP"
+            counter="3" hasChildrenOfSameFacet="false" />
+    </vfs:virtualFoldersResult>
+"#;
+
 const OWNER_XML: &str = r#"
     <vfs:virtualFoldersResult xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"
         objectCount="12">
@@ -111,6 +121,8 @@ enum Behavior {
     ShapeChange,
     CoalesceRefresh,
     AncestorRefreshRace,
+    Preload,
+    PreloadFailure,
 }
 
 #[derive(Clone)]
@@ -124,6 +136,7 @@ struct TransportState {
     requests: Mutex<Vec<String>>,
     facet_count: AtomicUsize,
     post_count: AtomicUsize,
+    batch_count: AtomicUsize,
     active: AtomicUsize,
     max_active: AtomicUsize,
     descendant_started: Notify,
@@ -356,7 +369,91 @@ impl TestTransport {
                     )))
                 }
             }
+            Behavior::Preload | Behavior::PreloadFailure => {
+                if body.contains("<vfs:facet>GROUP</vfs:facet>") {
+                    Ok(GROUPS_XML.to_owned())
+                } else if body.contains("<vfs:value>SOURCE_LIBRARY</vfs:value>")
+                    && body.contains("<vfs:facet>TYPE</vfs:facet>")
+                {
+                    Ok(TYPE_XML.to_owned())
+                } else if body.contains("<vfs:value>DICTIONARY</vfs:value>")
+                    && body.contains("<vfs:facet>TYPE</vfs:facet>")
+                {
+                    if matches!(self.behavior, Behavior::PreloadFailure) {
+                        Err(io::Error::other("temporary dictionary preload failure"))
+                    } else {
+                        Ok(TYPE_XML
+                            .replace("objectCount=\"12\"", "objectCount=\"3\"")
+                            .replace("counter=\"12\"", "counter=\"3\""))
+                    }
+                } else if body.contains("<vfs:value>DICTIONARY</vfs:value>") {
+                    Ok(OBJECT_XML.replace("objectCount=\"1\"", "objectCount=\"3\""))
+                } else {
+                    Err(io::Error::other(format!(
+                        "unexpected preload request body: {body}"
+                    )))
+                }
+            }
         }
+    }
+
+    fn batch_response(&self, request: &AdtRequest) -> AdtResponse {
+        let content_type = request
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .expect("batch requests advertise their boundary");
+        let boundary = content_type
+            .split(';')
+            .find_map(|field| field.trim().strip_prefix("boundary="))
+            .expect("batch Content-Type contains a boundary");
+        let marker = format!("--{boundary}");
+        let request_body = String::from_utf8_lossy(request.body());
+        let bodies = request_body
+            .split(&marker)
+            .filter_map(|part| {
+                let part = part.trim_matches(['\r', '\n', '-']);
+                if part.is_empty() {
+                    return None;
+                }
+                let (_, inner_request) = part.split_once("\r\n\r\n")?;
+                let (head, body) = inner_request.split_once("\r\n\r\n")?;
+                assert!(head.lines().any(|line| {
+                    line.eq_ignore_ascii_case(
+                        "accept:application/vnd.sap.adt.repository.virtualfolders.result.v1+xml",
+                    )
+                }));
+                Some(body.trim_end_matches("\r\n").to_owned())
+            })
+            .collect::<Vec<_>>();
+
+        let response_boundary = "vfs_batch_response";
+        let mut response_body = Vec::new();
+        for body in bodies {
+            self.state.requests.lock().unwrap().push(body.clone());
+            let request_number = self.state.post_count.fetch_add(1, Ordering::SeqCst);
+            let response = self.repository_response(&body, request_number);
+            let (status, body) = match response {
+                Ok(body) => (StatusCode::OK, body),
+                Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+            };
+            response_body.extend_from_slice(format!("--{response_boundary}\r\n").as_bytes());
+            response_body.extend_from_slice(b"content-type: application/http\r\n");
+            response_body.extend_from_slice(b"content-transfer-encoding: binary\r\n\r\n");
+            response_body
+                .extend_from_slice(format!("HTTP/1.1 {} test\r\n\r\n", status.as_u16()).as_bytes());
+            response_body.extend_from_slice(body.as_bytes());
+            response_body.extend_from_slice(b"\r\n");
+        }
+        response_body.extend_from_slice(format!("--{response_boundary}--\r\n").as_bytes());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/mixed; boundary={response_boundary}"))
+                .unwrap(),
+        );
+        AdtResponse::new(StatusCode::ACCEPTED, headers, response_body)
     }
 }
 
@@ -374,6 +471,10 @@ impl Transport for TestTransport {
         {
             self.state.facet_count.fetch_add(1, Ordering::SeqCst);
             return Ok(Self::response(FACETS_XML.as_bytes().to_vec()));
+        }
+        if request.target().as_str() == "/sap/bc/adt/communication/batch" {
+            self.state.batch_count.fetch_add(1, Ordering::SeqCst);
+            return Ok(self.batch_response(&request));
         }
 
         let body = String::from_utf8_lossy(request.body()).into_owned();
@@ -535,6 +636,7 @@ async fn traverses_packages_groups_types_and_objects() {
     ));
 
     let package_children = vfs.children(mounts[0].id).await.unwrap();
+    assert_eq!(state.batch_count.load(Ordering::SeqCst), 1);
     assert_eq!(
         package_children
             .iter()
@@ -745,6 +847,77 @@ async fn adaptive_facets_skip_only_their_own_level() {
         assert_eq!(children[0].label, expected_label);
         assert_eq!(state.post_count.load(Ordering::SeqCst), expected_requests);
     }
+}
+
+#[tokio::test]
+async fn preloads_all_children_in_adaptive_batch_waves() {
+    let (client, state) = client(Behavior::Preload).await;
+    let vfs = VirtualRepositoryTree::builder(client)
+        .mount(selection_mount("Objects").facet_policy(FacetPolicy::new([
+            FacetLevel::always(RepositoryFacet::GROUP),
+            FacetLevel::adaptive(RepositoryFacet::TYPE, 10),
+        ])))
+        .build()
+        .await
+        .unwrap();
+    let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+
+    vfs.preload_all_children(mount.id).await.unwrap();
+
+    let groups = vfs.cached_children(mount.id).unwrap().unwrap();
+    let source_library = groups
+        .iter()
+        .find(|node| node.label == "Source Code Library")
+        .unwrap();
+    let dictionary = groups
+        .iter()
+        .find(|node| node.label == "Dictionary")
+        .unwrap();
+    assert_eq!(
+        vfs.cached_children(source_library.id).unwrap().unwrap()[0].label,
+        "Classes"
+    );
+    assert_eq!(
+        vfs.cached_children(dictionary.id).unwrap().unwrap()[0].label,
+        "ZCL_DEMO"
+    );
+    assert_eq!(state.batch_count.load(Ordering::SeqCst), 2);
+    assert_eq!(state.post_count.load(Ordering::SeqCst), 4);
+
+    vfs.children(source_library.id).await.unwrap();
+    vfs.children(dictionary.id).await.unwrap();
+    assert_eq!(state.post_count.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
+async fn ignores_individual_preload_failures() {
+    let (client, state) = client(Behavior::PreloadFailure).await;
+    let vfs = VirtualRepositoryTree::builder(client)
+        .mount(
+            selection_mount("Objects").facet_policy(FacetPolicy::grouped([
+                RepositoryFacet::GROUP,
+                RepositoryFacet::TYPE,
+            ])),
+        )
+        .build()
+        .await
+        .unwrap();
+    let mount = vfs.children(vfs.root()).await.unwrap().remove(0);
+
+    vfs.preload_all_children(mount.id).await.unwrap();
+
+    let groups = vfs.cached_children(mount.id).unwrap().unwrap();
+    let source_library = groups
+        .iter()
+        .find(|node| node.label == "Source Code Library")
+        .unwrap();
+    let dictionary = groups
+        .iter()
+        .find(|node| node.label == "Dictionary")
+        .unwrap();
+    assert!(vfs.cached_children(source_library.id).unwrap().is_some());
+    assert_eq!(vfs.cached_children(dictionary.id).unwrap(), None);
+    assert_eq!(state.batch_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

@@ -2,98 +2,190 @@
 
 use std::{cmp::Ordering, sync::Arc};
 
-use futures_util::future::try_join;
+use async_lock::MutexGuardArc;
+use futures_util::future::try_join_all;
 use zadt::{
-    Client, Operation, Package, Ready, RepositoryContent, RepositoryContentOperation,
-    RepositoryContentQuery, RepositoryFacet, RepositoryObjectEntry, RepositoryPreselection,
-    RepositoryVirtualFolder,
+    BatchKey, Batched, Client, Operation, Package, Ready, RepositoryContent,
+    RepositoryContentOperation, RepositoryContentQuery, RepositoryFacet, RepositoryObjectEntry,
+    RepositoryPreselection, RepositoryVirtualFolder,
 };
 
 use super::VirtualRepositoryTree;
-use crate::{FacetPolicy, Mount, MountKind, NodeKind, ObjectNode, VfsError, config::MountTarget};
+use crate::{
+    FacetPolicy, Mount, MountKind, NodeId, NodeKind, ObjectNode, VfsError, config::MountTarget,
+};
 
-/// Immutable mount configuration and the complete RIS filter path to one node.
+/// The execution state of an expansion. While [`ExpansionStrategy`] permanently
+/// tells its associated node how it can expand, the [`Expansion`] holds the
+/// concrete plan to actually perform that expansion. This decouples orchestrating
+/// the expansions from actually performing the requests, allowing us to efficiently
+/// execute them concurrently later.
 ///
-/// The vector of preselections must be cloned per node.
-#[derive(Clone, Eq, PartialEq)]
-pub(super) struct ExpansionContext {
-    facet_policy: Arc<FacetPolicy>,
-    preselections: Vec<RepositoryPreselection>,
+/// One strategy can produce multiple independent expansions. A package, for
+/// example, can produce one expansion for child packages and another for directly
+/// assigned content. Their requests can execute concurrently and their
+/// [`PreparedChildren`] are merged after both expansions complete.
+///
+/// Each expansion follows a request/advance cycle. [`Expansion::request`] builds
+/// the query for its current state without mutating it. The corresponding response
+/// must then be passed back to the same expansion through [`Expansion::advance`].
+/// Advancing either completes the expansion or updates its cursor so another query
+/// can be issued in the next wave.
+///
+/// The process looks roughly like this:
+///
+/// NodeRecord
+/// └── ExpansionStrategy (persistent expansion definition)
+///         │
+///         ▼
+///     Expansion (temporary execution state)
+///         │ request / advance
+///         ▼
+///     PreparedChildren
+///
+/// When several expansions are driven together, completed expansions retain their
+/// prepared children while only incomplete adaptive expansions enter the next wave:
+///
+/// ```text
+/// wave 1: [child packages, direct TYPE, sibling TYPE]
+///                                │
+///                                └── adaptive TYPE skipped
+/// wave 2: [direct objects]
+/// ```
+enum Expansion {
+    /// Top-level package hierarchy.
+    PackageIndex { context: ExpansionContext },
+    /// Child packages belonging to one package.
+    ChildPackages {
+        context: ExpansionContext,
+        selection: Vec<RepositoryPreselection>,
+    },
+    /// Content directly assigned to one package.
+    Package { cursor: ContentCursor },
+    /// Content selected through a mount or facet.
+    Content {
+        cursor: ContentCursor,
+        retain_object_count: bool,
+    },
 }
 
-impl ExpansionContext {
-    fn new(facet_policy: FacetPolicy, preselections: Vec<RepositoryPreselection>) -> Self {
-        Self {
-            facet_policy: Arc::new(facet_policy),
-            preselections,
+impl Expansion {
+    /// Converts a persistent node strategy into independently executable expansions.
+    ///
+    /// Most strategies produce one expansion. Packages can produce separate child
+    /// package and direct-content expansions, allowing both requests to run concurrently.
+    /// Static nodes and leaves have no backend expansion and therefore produce none.
+    fn prepare(strategy: ExpansionStrategy) -> Vec<Self> {
+        match strategy {
+            ExpansionStrategy::Static | ExpansionStrategy::Leaf => Vec::new(),
+            ExpansionStrategy::PackageIndex { context } => {
+                vec![Self::PackageIndex { context }]
+            }
+            ExpansionStrategy::Package {
+                package,
+                context,
+                has_child_packages,
+            } => {
+                let mut expansions = Vec::with_capacity(if has_child_packages { 2 } else { 1 });
+
+                // If there are child packages, we need both expansions.
+                if has_child_packages {
+                    let mut selection = context.preselections().to_vec();
+                    selection.push(RepositoryPreselection::new(
+                        RepositoryFacet::PACKAGE,
+                        &package,
+                    ));
+                    expansions.push(Self::ChildPackages {
+                        context: context.clone(),
+                        selection,
+                    });
+                }
+                expansions.push(Self::Package {
+                    cursor: ContentCursor {
+                        context: context.with(RepositoryPreselection::directly_assigned(&package)),
+                        next_facet: 0,
+                    },
+                });
+                expansions
+            }
+            ExpansionStrategy::Selection { context } => vec![Self::Content {
+                cursor: ContentCursor {
+                    context,
+                    next_facet: 0,
+                },
+                retain_object_count: false,
+            }],
+            ExpansionStrategy::Facet {
+                context,
+                facet_index,
+                has_children_of_same_facet,
+                ..
+            } => vec![Self::Content {
+                cursor: ContentCursor {
+                    context,
+                    next_facet: if has_children_of_same_facet {
+                        facet_index
+                    } else {
+                        facet_index + 1
+                    },
+                },
+                retain_object_count: true,
+            }],
         }
     }
 
-    fn facet_policy(&self) -> &FacetPolicy {
-        &self.facet_policy
-    }
-
-    fn preselections(&self) -> &[RepositoryPreselection] {
-        &self.preselections
-    }
-
-    fn with(&self, preselection: RepositoryPreselection) -> Self {
-        let mut context = self.clone();
-        // RIS intersects repeated same-facet entries, while retaining them also
-        // preserves the complete path through hierarchical facets.
-        context.preselections.push(preselection);
-        context
-    }
-
-    /// Creates a new [`ExpansionStrategy`] for this context where the given package
-    /// is used to expand upon. The expansion policy is shared.
+    /// Builds the next query for this expansion's current state.
     ///
-    /// We can tell this package expansion whether it has child packages at this time to
-    /// preemptively prevent child package probing if that is not the case.
-    fn child_package(&self, package: String, has_child_packages: bool) -> ExpansionStrategy {
-        ExpansionStrategy::Package {
-            package,
-            context: self.clone(),
-            has_child_packages,
+    /// This does not mutate the expansion. The decoded response must be routed back
+    /// to this same value through [`Expansion::advance`] before another request is
+    /// built for it.
+    fn request(&self) -> Result<RepositoryContentQuery, VfsError> {
+        match self {
+            Self::PackageIndex { context } => {
+                content_query(context.preselections(), Some(&RepositoryFacet::PACKAGE))
+            }
+            Self::ChildPackages { selection, .. } => {
+                content_query(selection, Some(&RepositoryFacet::PACKAGE))
+            }
+            Self::Package { cursor } | Self::Content { cursor, .. } => cursor.request(),
         }
     }
 
-    /// Creates a new [`ExpansionStrategy`] whose context includes the selected facet value.
+    /// Applies the response produced by the preceding [`Expansion::request`].
     ///
-    /// For example, selecting a group folder while browsing a package produces
-    /// the following transition:
-    ///
-    /// ```text
-    /// Parent query:
-    ///   preselections: [PACKAGE=../ROOT]
-    ///   output facet:  GROUP (index 0)
-    ///
-    /// Selected folder:
-    ///   GROUP=SOURCE_LIBRARY
-    ///
-    /// Child expansion:
-    ///   preselections: [PACKAGE=../ROOT, GROUP=SOURCE_LIBRARY]
-    ///   facet index:   0
-    ///
-    /// Expanding that child:
-    ///   same-facet children: GROUP (index 0)
-    ///   otherwise:           TYPE  (index 1)
-    /// ```
-    ///
-    /// This method stores the index of the facet that produced the child. The
-    /// expansion logic later decides whether to repeat or advance that index.
-    fn child_facet(
-        &self,
-        preselection: RepositoryPreselection,
-        facet_index: usize,
-        object_count: u32,
-        has_children_of_same_facet: bool,
-    ) -> ExpansionStrategy {
-        ExpansionStrategy::Facet {
-            context: self.with(preselection),
-            facet_index,
-            object_count,
-            has_children_of_same_facet,
+    /// `Some` completes the expansion and yields children ready for graph insertion.
+    /// `None` means an adaptive facet was not retained; the internal cursor has moved
+    /// to the next level and [`Expansion::request`] must be called again.
+    fn advance(
+        &mut self,
+        content: RepositoryContent,
+    ) -> Result<Option<PreparedChildren>, VfsError> {
+        match self {
+            Self::PackageIndex { context } | Self::ChildPackages { context, .. } => {
+                Ok(Some(PreparedChildren {
+                    nodes: LoadedLayer::from_packages(content, context.clone())?.nodes,
+                    object_count: None,
+                    has_children_of_same_facet: None,
+                }))
+            }
+            Self::Package { cursor } => Ok(cursor.advance(content).map(|layer| PreparedChildren {
+                nodes: layer.nodes,
+                object_count: None,
+                has_children_of_same_facet: None,
+            })),
+            Self::Content {
+                cursor,
+                retain_object_count,
+            } => {
+                let Some(layer) = cursor.advance(content) else {
+                    return Ok(None);
+                };
+                Ok(Some(PreparedChildren {
+                    object_count: retain_object_count.then_some(layer.object_count),
+                    nodes: layer.nodes,
+                    has_children_of_same_facet: None,
+                }))
+            }
         }
     }
 }
@@ -177,6 +269,92 @@ impl ExpansionStrategy {
                     && left_has_children == right_has_children
             }
             _ => false,
+        }
+    }
+}
+
+/// Immutable mount configuration and the complete RIS filter path to one node.
+///
+/// The vector of preselections must be cloned per node.
+#[derive(Clone, Eq, PartialEq)]
+pub(super) struct ExpansionContext {
+    facet_policy: Arc<FacetPolicy>,
+    preselections: Vec<RepositoryPreselection>,
+}
+
+impl ExpansionContext {
+    fn new(facet_policy: FacetPolicy, preselections: Vec<RepositoryPreselection>) -> Self {
+        Self {
+            facet_policy: Arc::new(facet_policy),
+            preselections,
+        }
+    }
+
+    fn facet_policy(&self) -> &FacetPolicy {
+        &self.facet_policy
+    }
+
+    fn preselections(&self) -> &[RepositoryPreselection] {
+        &self.preselections
+    }
+
+    fn with(&self, preselection: RepositoryPreselection) -> Self {
+        let mut context = self.clone();
+        // RIS intersects repeated same-facet entries, while retaining them also
+        // preserves the complete path through hierarchical facets.
+        context.preselections.push(preselection);
+        context
+    }
+
+    /// Creates a new [`ExpansionStrategy`] for this context where the given package
+    /// is used to expand upon. The expansion policy is shared.
+    ///
+    /// We can tell this package expansion whether it has child packages at this time to
+    /// preemptively prevent child package probing if that is not the case.
+    fn child_package(&self, package: String, has_child_packages: bool) -> ExpansionStrategy {
+        ExpansionStrategy::Package {
+            package,
+            context: self.clone(),
+            has_child_packages,
+        }
+    }
+
+    /// Creates a new [`ExpansionStrategy`] whose context includes the selected facet value.
+    ///
+    /// For example, selecting a group folder while browsing a package produces
+    /// the following transition:
+    ///
+    /// ```text
+    /// Parent query:
+    ///   preselections: [PACKAGE=../ROOT]
+    ///   output facet:  GROUP (index 0)
+    ///
+    /// Selected folder:
+    ///   GROUP=SOURCE_LIBRARY
+    ///
+    /// Child expansion:
+    ///   preselections: [PACKAGE=../ROOT, GROUP=SOURCE_LIBRARY]
+    ///   facet index:   0
+    ///
+    /// Expanding that child:
+    ///   same-facet children: GROUP (index 0)
+    ///   otherwise:           TYPE  (index 1)
+    /// ```
+    ///
+    /// This method stores the index of the facet that produced the child. The
+    /// expansion logic later decides whether to repeat or advance that index.
+    fn child_facet(
+        &self,
+        preselection: RepositoryPreselection,
+        facet_index: usize,
+        object_count: u32,
+        has_children_of_same_facet: bool,
+    ) -> ExpansionStrategy {
+        ExpansionStrategy::Facet {
+            context: self.with(preselection),
+            facet_index,
+            object_count,
+            has_children_of_same_facet,
         }
     }
 }
@@ -297,10 +475,34 @@ impl From<RepositoryObjectEntry> for PreparedNode {
     }
 }
 
-pub(super) struct Loaded {
-    pub(super) prepared: Vec<PreparedNode>,
+pub(super) struct PreparedChildren {
+    pub(super) nodes: Vec<PreparedNode>,
     pub(super) object_count: Option<u32>,
     pub(super) has_children_of_same_facet: Option<bool>,
+}
+
+impl PreparedChildren {
+    fn merge(parts: Vec<Self>) -> Self {
+        let mut merged = Self {
+            nodes: Vec::new(),
+            object_count: None,
+            has_children_of_same_facet: None,
+        };
+        for mut part in parts {
+            debug_assert!(merged.object_count.is_none() || part.object_count.is_none());
+            debug_assert!(
+                merged.has_children_of_same_facet.is_none()
+                    || part.has_children_of_same_facet.is_none()
+            );
+            merged.object_count = merged.object_count.or(part.object_count);
+            merged.has_children_of_same_facet = merged
+                .has_children_of_same_facet
+                .or(part.has_children_of_same_facet);
+            merged.nodes.append(&mut part.nodes);
+        }
+        merged.nodes.sort_by(PreparedNode::tree_order);
+        merged
+    }
 }
 
 /// Represents a layer in the repository tree that has been loaded.
@@ -387,25 +589,65 @@ impl LoadedLayer {
     }
 }
 
+struct ContentCursor {
+    context: ExpansionContext,
+    next_facet: usize,
+}
+
+impl ContentCursor {
+    fn request(&self) -> Result<RepositoryContentQuery, VfsError> {
+        let facet = self
+            .context
+            .facet_policy()
+            .levels()
+            .get(self.next_facet)
+            .map(|level| level.facet());
+        content_query(self.context.preselections(), facet)
+    }
+
+    fn advance(&mut self, content: RepositoryContent) -> Option<LoadedLayer> {
+        let Some(level) = self.context.facet_policy().levels().get(self.next_facet) else {
+            return Some(LoadedLayer::from_objects(content));
+        };
+
+        if level.retains(content.object_count) {
+            return Some(LoadedLayer::from_folders(
+                content,
+                self.context.clone(),
+                self.next_facet,
+            ));
+        }
+
+        self.next_facet += 1;
+        None
+    }
+}
+
+struct PendingPreload {
+    node: NodeId,
+    generation: u64,
+    expansions: Vec<Expansion>,
+    prepared: Vec<PreparedChildren>,
+    _load: MutexGuardArc<()>,
+}
+
 impl VirtualRepositoryTree {
     /// Executes an expansion strategy and returns children not yet inserted into the graph.
     pub(super) async fn load(
         &self,
         expansion: ExpansionStrategy,
         refresh: bool,
-    ) -> Result<Loaded, VfsError> {
+    ) -> Result<PreparedChildren, VfsError> {
+        if !refresh {
+            return self.execute_expansion(expansion).await;
+        }
+
         match expansion {
             ExpansionStrategy::Static => unreachable!("static nodes have preloaded children"),
             // Loading of all packages, likely from the system library
             ExpansionStrategy::PackageIndex { context } => {
-                let content = self
-                    .query_content(context.preselections(), Some(&RepositoryFacet::PACKAGE))
-                    .await?;
-                Ok(Loaded {
-                    prepared: LoadedLayer::from_packages(content, context)?.nodes,
-                    object_count: None,
-                    has_children_of_same_facet: None,
-                })
+                self.execute_expansion(ExpansionStrategy::PackageIndex { context })
+                    .await
             }
             // Loading of the contents of a package, including directly assigned objects
             // and child packages if applicable.
@@ -415,46 +657,209 @@ impl VirtualRepositoryTree {
                 has_child_packages: mut probe_child_packages,
             } => {
                 probe_child_packages |= refresh;
-                Ok(Loaded {
-                    prepared: self.load_package(pkg, ctx, probe_child_packages).await?,
-                    object_count: None,
-                    has_children_of_same_facet: None,
+                self.execute_expansion(ExpansionStrategy::Package {
+                    package: pkg,
+                    context: ctx,
+                    has_child_packages: probe_child_packages,
                 })
+                .await
             }
             // Loading via a custom selection strategy
             ExpansionStrategy::Selection { context } => {
-                let layer = self.load_next_content_layer(context, 0).await?;
-                Ok(Loaded {
-                    prepared: layer.nodes,
-                    object_count: None,
-                    has_children_of_same_facet: None,
-                })
+                self.execute_expansion(ExpansionStrategy::Selection { context })
+                    .await
             }
             // Loading of a facet using its facet index to point to the current policy
             ExpansionStrategy::Facet {
                 context,
                 facet_index,
-                has_children_of_same_facet,
                 ..
             } => {
                 if refresh {
                     return self.refresh_facet(context, facet_index).await;
                 }
-                // Hierarchical facets repeat until RIS marks the selected folder as a leaf.
-                let next_facet = if has_children_of_same_facet {
-                    facet_index
-                } else {
-                    facet_index + 1
-                };
-                let layer = self.load_next_content_layer(context, next_facet).await?;
-                Ok(Loaded {
-                    prepared: layer.nodes,
-                    object_count: Some(layer.object_count),
-                    has_children_of_same_facet: None,
-                })
+                unreachable!("non-refresh facet loads use prepared expansions")
             }
             ExpansionStrategy::Leaf => unreachable!("leaf expansion is rejected before loading"),
         }
+    }
+
+    async fn execute_expansion(
+        &self,
+        strategy: ExpansionStrategy,
+    ) -> Result<PreparedChildren, VfsError> {
+        let mut pending = Expansion::prepare(strategy);
+        assert!(
+            !pending.is_empty(),
+            "static and leaf expansions are rejected before loading"
+        );
+        let mut prepared = Vec::new();
+        loop {
+            let requests = pending
+                .iter()
+                .map(Expansion::request)
+                .collect::<Result<Vec<_>, _>>()?;
+            let responses = self.batch_execute_requests(requests).await?;
+            let mut next = Vec::new();
+            for (mut expansion, response) in pending.into_iter().zip(responses) {
+                match expansion.advance(response)? {
+                    Some(children) => prepared.push(children),
+                    None => next.push(expansion),
+                }
+            }
+            if next.is_empty() {
+                return Ok(PreparedChildren::merge(prepared));
+            }
+            pending = next;
+        }
+    }
+
+    /// Executes the provided [`RepositoryContentQuery`] either in batch or in
+    /// single mode depending on the number of queries needed. While the effect
+    /// is negligible for a small set of requests, it can noticably improve
+    /// performance for preloading a bigger set of nodes.
+    async fn batch_execute_requests(
+        &self,
+        requests: Vec<RepositoryContentQuery>,
+    ) -> Result<Vec<RepositoryContent>, VfsError> {
+        if requests.len() > 1 && self.inner.client.batch().is_ok() {
+            return Ok(requests.batched(&self.inner.client).await?);
+        }
+
+        // Fall back to sequential requests if batching it not supported
+        try_join_all(requests.into_iter().map(|request| async move {
+            Ok::<_, VfsError>(request.execute(&self.inner.client).await?)
+        }))
+        .await
+    }
+
+    pub(super) async fn preload_children(&self, children: Vec<NodeId>) {
+        let mut pending = Vec::new();
+        for node in children {
+            let load = {
+                let graph = self.inner.graph.read();
+                let Some(record) = graph.record(node) else {
+                    continue;
+                };
+                if record.children.is_some() {
+                    continue;
+                }
+                record.load.clone()
+            };
+            let Some(load_guard) = load.try_lock_arc() else {
+                continue;
+            };
+            let Some((generation, strategy)) = ({
+                let graph = self.inner.graph.read();
+                graph.record(node).and_then(|record| {
+                    record
+                        .children
+                        .is_none()
+                        .then(|| (record.generation, record.expansion.clone()))
+                })
+            }) else {
+                continue;
+            };
+            let expansions = Expansion::prepare(strategy);
+            if expansions.is_empty() {
+                continue;
+            }
+            pending.push(PendingPreload {
+                node,
+                generation,
+                expansions,
+                prepared: Vec::new(),
+                _load: load_guard,
+            });
+        }
+
+        while !pending.is_empty() {
+            let Ok(mut batch) = self.inner.client.batch() else {
+                return;
+            };
+            let mut routes: Vec<(usize, usize, BatchKey<RepositoryContent>)> = Vec::new();
+            let mut failed = vec![false; pending.len()];
+
+            for (index, preload) in pending.iter().enumerate() {
+                for (expansion_index, expansion) in preload.expansions.iter().enumerate() {
+                    match expansion.request() {
+                        Ok(request) => {
+                            routes.push((index, expansion_index, batch.push(request)));
+                        }
+                        Err(_) => failed[index] = true,
+                    }
+                }
+            }
+
+            if routes.is_empty() {
+                return;
+            }
+            let Ok(mut batch_responses) = batch.execute(&self.inner.client).await else {
+                return;
+            };
+            let mut responses = pending
+                .iter()
+                .map(|preload| {
+                    (0..preload.expansions.len())
+                        .map(|_| None)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            for (index, expansion_index, key) in routes {
+                match batch_responses.take(key) {
+                    Ok(response) => responses[index][expansion_index] = Some(response),
+                    Err(_) => failed[index] = true,
+                }
+            }
+
+            let mut next = Vec::new();
+            for (index, mut preload) in pending.into_iter().enumerate() {
+                if failed[index] {
+                    continue;
+                }
+                let mut next_expansions = Vec::new();
+                let expansion_responses = std::mem::take(&mut responses[index]);
+                let mut advance_failed = false;
+                for (mut expansion, response) in
+                    preload.expansions.into_iter().zip(expansion_responses)
+                {
+                    let Some(response) = response else {
+                        advance_failed = true;
+                        break;
+                    };
+                    match expansion.advance(response) {
+                        Ok(Some(prepared)) => preload.prepared.push(prepared),
+                        Ok(None) => next_expansions.push(expansion),
+                        Err(_) => {
+                            advance_failed = true;
+                            break;
+                        }
+                    }
+                }
+                if advance_failed {
+                    continue;
+                }
+                if next_expansions.is_empty() {
+                    let prepared = PreparedChildren::merge(preload.prepared);
+                    self.commit_preload(preload.node, preload.generation, prepared);
+                } else {
+                    preload.expansions = next_expansions;
+                    next.push(preload);
+                }
+            }
+            pending = next;
+        }
+    }
+
+    fn commit_preload(&self, node: NodeId, generation: u64, prepared: PreparedChildren) {
+        let mut graph = self.inner.graph.write();
+        let _ = graph.install_loaded_children(
+            node,
+            generation,
+            prepared.nodes,
+            prepared.object_count,
+            prepared.has_children_of_same_facet,
+        );
     }
 
     /// Re-probes a facet so changes to same-facet hierarchy are discovered.
@@ -465,7 +870,7 @@ impl VirtualRepositoryTree {
         &self,
         ctx: ExpansionContext,
         facet_index: usize,
-    ) -> Result<Loaded, VfsError> {
+    ) -> Result<PreparedChildren, VfsError> {
         let level = ctx
             .facet_policy()
             .levels()
@@ -482,8 +887,8 @@ impl VirtualRepositoryTree {
         // children of the same facet.
         if !definition.is_hierarchical {
             let layer = self.load_next_content_layer(ctx, facet_index + 1).await?;
-            return Ok(Loaded {
-                prepared: layer.nodes,
+            return Ok(PreparedChildren {
+                nodes: layer.nodes,
                 object_count: Some(layer.object_count),
                 has_children_of_same_facet: Some(false),
             });
@@ -504,63 +909,19 @@ impl VirtualRepositoryTree {
                     .await?
                     .nodes
             };
-            return Ok(Loaded {
-                prepared: specs,
+            return Ok(PreparedChildren {
+                nodes: specs,
                 object_count: Some(object_count),
                 has_children_of_same_facet: Some(true),
             });
         }
 
         let layer = self.load_next_content_layer(ctx, facet_index + 1).await?;
-        Ok(Loaded {
-            prepared: layer.nodes,
+        Ok(PreparedChildren {
+            nodes: layer.nodes,
             object_count: Some(layer.object_count),
             has_children_of_same_facet: Some(false),
         })
-    }
-
-    /// Loads directly assigned content and, when needed, child packages.
-    ///
-    /// ## Background
-    ///
-    /// In RIS, a query with the preselection `PACKAGE=/DMO/FLIGHT` and the desired
-    /// facet, e.g. `GROUP`, returns contents of **all** sub-packages.
-    ///
-    /// In other words, you will get a number of groups even if the package `/DMO/FLIGHT`
-    /// only consists of sub-packages. For this reason, the facet `PACKAGE=../DMO/FLIGHT`
-    /// must be used, which is a special notation to request directly assigned objects.
-    ///
-    /// When child packages may exist, this method dispatches both requests concurrently.
-    ///
-    /// TODO: Ideally this should be done with a batch request once ADT supports it
-    async fn load_package(
-        &self,
-        pkg: String,
-        ctx: ExpansionContext,
-        probe_child_packages: bool,
-    ) -> Result<Vec<PreparedNode>, VfsError> {
-        let direct_context = ctx.with(RepositoryPreselection::directly_assigned(&pkg));
-
-        // Avoid doing needless work if we already know there are no child packages.
-        if !probe_child_packages {
-            return Ok(self.load_next_content_layer(direct_context, 0).await?.nodes);
-        }
-
-        // Even though package preselections are absolute, we cannot discard preselections
-        // such as the owner or application component!
-        let mut child_selection = ctx.preselections().to_vec();
-        child_selection.push(RepositoryPreselection::new(RepositoryFacet::PACKAGE, &pkg));
-
-        // Dispatch the futures concurrently to speed things up.
-        // TODO: Batch this up!
-        let child_packages = self.query_content(&child_selection, Some(&RepositoryFacet::PACKAGE));
-        let direct_objects = self.load_next_content_layer(direct_context, 0);
-        let (packages, objects) = try_join(child_packages, direct_objects).await?;
-
-        let mut nodes = LoadedLayer::from_packages(packages, ctx)?.nodes;
-        nodes.extend(objects.nodes);
-        nodes.sort_by(PreparedNode::tree_order);
-        Ok(nodes)
     }
 
     /// Applies the next configured facet, or returns objects when the chain ends.
@@ -574,24 +935,17 @@ impl VirtualRepositoryTree {
     async fn load_next_content_layer(
         &self,
         ctx: ExpansionContext,
-        mut next_facet: usize,
+        next_facet: usize,
     ) -> Result<LoadedLayer, VfsError> {
-        let selection = ctx.preselections();
+        let mut cursor = ContentCursor {
+            context: ctx,
+            next_facet,
+        };
         loop {
-            let Some(level) = ctx.facet_policy().levels().get(next_facet) else {
-                // No more facets left, just get the objects
-                let content = self.query_content(selection, None).await?;
-                return Ok(LoadedLayer::from_objects(content));
-            };
-
-            // Content grouped by some facet, the object count decides whether we
-            // keep it based on the adaptive treshold. Notably, these are not real
-            // objects, they are virtual facets, so discarding them is not a big deal.
-            let grouped = self.query_content(selection, Some(level.facet())).await?;
-            if level.retains(grouped.object_count) {
-                return Ok(LoadedLayer::from_folders(grouped, ctx, next_facet));
+            let content = cursor.request()?.execute(&self.inner.client).await?;
+            if let Some(layer) = cursor.advance(content) {
+                return Ok(layer);
             }
-            next_facet += 1;
         }
     }
 
@@ -602,17 +956,26 @@ impl VirtualRepositoryTree {
         preselections: &[RepositoryPreselection],
         facet: Option<&RepositoryFacet>,
     ) -> Result<RepositoryContent, VfsError> {
-        let mut builder = RepositoryContentQuery::builder()
-            .operation(RepositoryContentOperation::Expand)
-            .ignore_short_descriptions(false)
-            .preselections(preselections);
-
-        if let Some(facet) = facet {
-            builder = builder.facet(facet.clone());
-        }
-
-        Ok(builder.build()?.execute(&self.inner.client).await?)
+        Ok(content_query(preselections, facet)?
+            .execute(&self.inner.client)
+            .await?)
     }
+}
+
+fn content_query(
+    preselections: &[RepositoryPreselection],
+    facet: Option<&RepositoryFacet>,
+) -> Result<RepositoryContentQuery, VfsError> {
+    let mut builder = RepositoryContentQuery::builder()
+        .operation(RepositoryContentOperation::Expand)
+        .ignore_short_descriptions(false)
+        .preselections(preselections);
+
+    if let Some(facet) = facet {
+        builder = builder.facet(facet.clone());
+    }
+
+    Ok(builder.build()?)
 }
 
 #[cfg(test)]

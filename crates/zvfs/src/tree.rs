@@ -289,19 +289,29 @@ impl VirtualRepositoryTree {
 
         // Insert the children into the tree first so that we can get
         // references to have the parent node point to
-        let loaded = self.load(expansion, false).await?;
+        let prepared = self.load(expansion, false).await?;
         let mut graph = self.inner.graph.write();
-        let children = graph.try_insert_children(id, generation, loaded.prepared)?;
-
-        // Update the parent with the references and the possibly new
-        // repository metadata to keep it synced
-        let record = graph.mut_record(id).ok_or(VfsError::StaleNode(id))?;
-        record.install_children(
-            children.clone(),
-            loaded.object_count,
-            loaded.has_children_of_same_facet,
-        );
+        let children = graph.install_loaded_children(
+            id,
+            generation,
+            prepared.nodes,
+            prepared.object_count,
+            prepared.has_children_of_same_facet,
+        )?;
         graph.node_snapshots(&children)
+    }
+
+    /// Best-effort loads one layer beneath every unloaded child of `id`.
+    ///
+    /// The immediate children are loaded first when necessary. Their expansion
+    /// requests are then grouped into batch waves, while leaves and children
+    /// already present in the cache are skipped. Callers that do not want to
+    /// await this optimization can schedule the returned future on their runtime.
+    pub async fn preload_all_children(&self, id: NodeId) -> Result<(), VfsError> {
+        let children = self.children(id).await?;
+        self.preload_children(children.into_iter().map(|child| child.id).collect())
+            .await;
+        Ok(())
     }
 
     /// Reloads one directory and atomically replaces its cached descendants.
@@ -336,15 +346,15 @@ impl VirtualRepositoryTree {
             }
             (record.expansion.clone(), record.generation)
         };
-        let loaded = self.load(expansion, true).await?;
+        let prepared = self.load(expansion, true).await?;
         let mut graph = self.inner.graph.write();
-        let children = graph.reconcile_children(id, generation, loaded.prepared)?;
+        let children = graph.reconcile_children(id, generation, prepared.nodes)?;
 
         let record = graph.mut_record(id).ok_or(VfsError::StaleNode(id))?;
         record.install_children(
             children.clone(),
-            loaded.object_count,
-            loaded.has_children_of_same_facet,
+            prepared.object_count,
+            prepared.has_children_of_same_facet,
         );
         record.advance_refresh_revision();
         graph.node_snapshots(&children)

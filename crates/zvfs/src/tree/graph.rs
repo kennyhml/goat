@@ -118,6 +118,30 @@ impl Graph {
             .collect())
     }
 
+    /// Installs a freshly loaded layer unless another load already populated it.
+    pub(super) fn install_loaded_children(
+        &mut self,
+        parent: NodeId,
+        generation: u64,
+        children: Vec<PreparedNode>,
+        object_count: Option<u32>,
+        has_children_of_same_facet: Option<bool>,
+    ) -> Result<Vec<u64>, VfsError> {
+        let record = self.record(parent).ok_or(VfsError::StaleNode(parent))?;
+        if record.generation != generation {
+            return Err(VfsError::StaleNode(parent));
+        }
+        if let Some(children) = &record.children {
+            return Ok(children.clone());
+        }
+
+        let children = self.try_insert_children(parent, generation, children)?;
+        self.mut_record(parent)
+            .ok_or(VfsError::StaleNode(parent))?
+            .install_children(children.clone(), object_count, has_children_of_same_facet);
+        Ok(children)
+    }
+
     /// Reconciles one freshly loaded layer against the current immediate children.
     /// Matching records keep their IDs, load gates, and compatible descendant caches.
     pub(super) fn reconcile_children(
