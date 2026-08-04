@@ -3,9 +3,9 @@
 use httpmock::Mock;
 use httpmock::prelude::*;
 use zadt::{
-    AccessMode, Client, Conditional, EntityTag, Include, IncludeProperties, IncludePropertyVersion,
-    Logon, ObjectType, ObjectVersion, Operation, Package, Program, ProgramProperties,
-    ProgramPropertiesVersion, Ready, ReqwestTransport,
+    AccessMode, Client, EntityTag, Include, IncludeProperties, IncludePropertyVersion, Logon,
+    ObjectType, ObjectVersion, Operation, Package, Program, ProgramProperties,
+    ProgramPropertiesVersion, Ready, ReqwestTransport, Revalidation,
 };
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
@@ -448,15 +448,15 @@ async fn program_properties_query_returns_not_modified_for_a_current_etag() {
         .object::<Program>("Z_TEST")
         .unwrap()
         .query()
-        .if_none_match(EntityTag::from_static("202607251959580008"))
         .version(ObjectVersion::Inactive)
+        .if_none_match(EntityTag::from_static("202607251959580008"))
         .execute(&client)
         .await
         .unwrap();
 
     assert!(matches!(
         &response,
-        Conditional::NotModified {
+        Revalidation::NotModified {
             etag: Some(etag)
         } if etag == "202607251959580008"
     ));

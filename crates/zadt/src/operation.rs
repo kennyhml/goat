@@ -10,10 +10,10 @@ use crate::{
 };
 
 mod batch;
-mod conditional;
+mod revalidation;
 
 pub use batch::{BatchError, BatchKey, BatchOperation, BatchResponses, Batched};
-pub use conditional::{Conditional, IfNoneMatch, QueryMode, Unconditional};
+pub use revalidation::{IfNoneMatch, Revalidation};
 
 const ADT_SESSION_TYPE: &str = "x-sap-adt-sessiontype";
 const STATEFUL_SESSION_TYPE: &str = "stateful";

@@ -7,7 +7,7 @@ use super::properties::ObjectPropertiesQuery;
 use crate::{
     AdtUri, CategoryId, Client, ObjectCollection, ObjectError, ObjectRef, Operation,
     OperationError, OperationResponse, Package, PackageSettings, PackageTree, PackageTreeKind,
-    Ready, ResponseError, Stateless, Unconditional,
+    Ready, ResponseError, Stateless,
     protocol::{AdtRequest, AdtResponse},
     target::{CollectionTarget, TemplateTarget},
 };
@@ -21,7 +21,7 @@ const PACKAGE_SETTINGS: CategoryId = CategoryId {
 };
 
 /// Fetches package properties using the generic object-properties protocol.
-pub type PackagePropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<Package, M>;
+pub type PackagePropertiesQuery = ObjectPropertiesQuery<Package>;
 
 /// Fetches either the ancestors or immediate children of a package.
 #[derive(Clone, Debug)]

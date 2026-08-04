@@ -7,7 +7,7 @@ use crate::{
     error::{ObjectError, OperationError, ResponseError},
     models::ProgramRunResult,
     objects::{Include, ObjectRef, Program},
-    operation::{Operation, OperationResponse, Stateless, Unconditional},
+    operation::{Operation, OperationResponse, Stateless},
     protocol::AdtRequest,
     target::TemplateTarget,
     vocabulary::{PROGRAM_RUN, PROGRAM_RUN_RELATION, media_type, query_parameter},
@@ -20,7 +20,7 @@ use url::Url;
 const PROGRAM_NAME_VARIABLE: &str = "programname";
 
 /// Fetches program properties using the generic object-properties protocol.
-pub type ProgramPropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<Program, M>;
+pub type ProgramPropertiesQuery = ObjectPropertiesQuery<Program>;
 
 /// Runs an executable ABAP program and returns its rendered console output.
 ///
@@ -85,7 +85,7 @@ impl Operation<Ready> for ProgramRun {
 }
 
 /// Fetches include properties using the generic object-properties protocol.
-pub type IncludePropertiesQuery<M = Unconditional> = ObjectPropertiesQuery<Include, M>;
+pub type IncludePropertiesQuery = ObjectPropertiesQuery<Include>;
 
 impl ObjectRef<Program> {
     /// Creates a builder for an operation that runs this program.
@@ -211,9 +211,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        AdtResponse, CompatibilityError, Conditional, EntityTag, IncludeProperties,
-        IncludePropertyVersion, NegotiableMediaVersion, ProgramProperties,
-        ProgramPropertiesVersion, vocabulary::PROGRAMS,
+        AdtResponse, CompatibilityError, EntityTag, IncludeProperties, IncludePropertyVersion,
+        NegotiableMediaVersion, ProgramProperties, ProgramPropertiesVersion, Revalidation,
+        vocabulary::PROGRAMS,
     };
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
@@ -460,7 +460,7 @@ mod tests {
 
         assert!(matches!(
             response,
-            Conditional::Modified(ProgramProperties::V3(_))
+            Revalidation::Modified(ProgramProperties::V3(_))
         ));
     }
 
@@ -501,7 +501,7 @@ mod tests {
             .if_none_match(EntityTag::from_static("include-etag"))
             .decode(operation_response(response))
             .unwrap();
-        assert!(matches!(&response, Conditional::NotModified { .. }));
+        assert!(matches!(&response, Revalidation::NotModified { .. }));
         assert_eq!(response.not_modified_etag(), Some("include-etag"));
         assert!(response.as_modified().is_none());
     }

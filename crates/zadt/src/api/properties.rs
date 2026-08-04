@@ -5,15 +5,18 @@ use crate::{
     compatibility::NegotiableMediaVersion,
     error::{OperationError, ResponseError},
     objects::{ObjectProperties, ObjectRef, ObjectVersion},
-    operation::{IfNoneMatch, Operation, OperationResponse, QueryMode, Stateless, Unconditional},
+    operation::{IfNoneMatch, Operation, OperationResponse, Stateless},
     protocol::{AdtRequest, EntityTag},
     target::CollectionTarget,
     vocabulary::query_parameter,
 };
 
 /// Fetches a versioned ADT object-properties representation.
+///
+/// The operation uses the target resource's endpoint and is generic over `T`
+/// so it can negotiate and parse that resource's properties representation.
 #[derive(Debug)]
-pub struct ObjectPropertiesQuery<T, M = Unconditional>
+pub struct ObjectPropertiesQuery<T>
 where
     T: ObjectProperties,
 {
@@ -25,8 +28,6 @@ where
 
     /// The repository-object version to request.
     pub version: Option<ObjectVersion>,
-
-    mode: M,
 }
 
 impl<T> ObjectPropertiesQuery<T>
@@ -39,15 +40,9 @@ where
             resource,
             priority: T::MediaVersion::SUPPORTED.to_vec(),
             version: None,
-            mode: Unconditional,
         }
     }
-}
 
-impl<T, M> ObjectPropertiesQuery<T, M>
-where
-    T: ObjectProperties,
-{
     /// Replaces the media-type preference order.
     pub fn priority(mut self, priority: impl Into<Vec<T::MediaVersion>>) -> Self {
         self.priority = priority.into();
@@ -59,29 +54,20 @@ where
         self.version = Some(version);
         self
     }
-}
 
-impl<T> ObjectPropertiesQuery<T, Unconditional>
-where
-    T: ObjectProperties,
-{
     /// Makes this query conditional on the supplied properties ETag.
-    pub fn if_none_match(self, etag: EntityTag) -> ObjectPropertiesQuery<T, IfNoneMatch> {
-        ObjectPropertiesQuery {
-            resource: self.resource,
-            priority: self.priority,
-            version: self.version,
-            mode: IfNoneMatch { etag },
-        }
+    ///
+    /// This setter must be called last.
+    pub fn if_none_match(self, etag: EntityTag) -> IfNoneMatch<Self> {
+        IfNoneMatch::new(self, etag)
     }
 }
 
-impl<T, M> Operation<Ready> for ObjectPropertiesQuery<T, M>
+impl<T> Operation<Ready> for ObjectPropertiesQuery<T>
 where
     T: ObjectProperties,
-    M: QueryMode<T::Properties>,
 {
-    type Response = M::Response;
+    type Response = T::Properties;
     type Kind = Stateless;
 
     fn request(&self, client: &Client<Ready>) -> Result<AdtRequest, OperationError> {
@@ -93,16 +79,13 @@ where
             request.push_query(query_parameter::VERSION, version.as_str());
         }
         request.set_accept(accept.media_type());
-        request.set_cache_revalidation(self.mode.if_none_match());
+        request.set_cache_revalidation(None);
         Ok(request)
     }
 
     fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
         if response.status() == StatusCode::NOT_MODIFIED {
-            return self
-                .mode
-                .not_modified(response.entity_tag())
-                .ok_or(ResponseError::UnexpectedNotModified);
+            return Err(ResponseError::UnexpectedNotModified);
         }
         if response.status() != StatusCode::OK {
             return Err(ResponseError::UnexpectedStatus {
@@ -135,7 +118,7 @@ where
         let properties = self
             .resource
             .parse(media_version, response.into_body(), etag)?;
-        Ok(self.mode.modified(properties))
+        Ok(properties)
     }
 }
 
