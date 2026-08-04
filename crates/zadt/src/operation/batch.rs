@@ -1,17 +1,10 @@
-//! Typed, heterogeneous batch operations.
-//!
-//! SAPs generic batch resource executes `application/http` subrequests in
-//! insertion order and returns one multipart response part for each request.
-//! [`BatchOperation`] preserves that order while [`BatchKey`] retains each
-//! operations concrete response type.
-
 use std::{any::Any, future::Future, marker::PhantomData, sync::Arc};
 
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::{Executor, Operation, OperationKind, Stateful, Stateless, UserSession};
+use super::{Execute, Operation, OperationKind, Stateful, Stateless, UserSession};
 use crate::{
     AdtRequest, AdtResponse, AdtUri, CategoryId, Client, CompatibilityError,
     NegotiableMediaVersion, OperationError, OperationResponse, Ready, ResponseError,
@@ -23,10 +16,9 @@ const BATCH_CATEGORY: CategoryId = CategoryId {
 };
 const BATCH_MEDIA_TYPE: &str = "multipart/mixed";
 const APPLICATION_HTTP: &str = "application/http";
-const BINARY: &str = "binary";
-const CRLF: &[u8] = b"\r\n";
-const MAX_PART_HEADERS: usize = 128;
 
+/// Unlikely these will ever be a V2 of batching but might as well do
+/// this the proper way, never know.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BatchMediaVersion {
     MultipartMixed,
@@ -42,55 +34,17 @@ impl NegotiableMediaVersion for BatchMediaVersion {
     }
 }
 
-/// This is where things get a bit freaky at first glance. At the end of the day,
-/// this trait allows us to simply call `T.batch()` on any homogenous collection
-/// of [`Operation`] `T` that implements [`IntoIterator`] and get back a
-/// [`Vec<T::Response>`] where `result[n]` is the response for operation `self[n]`.
-///
-/// This does not work on arrays of boxed, type erased operations as there is no
-/// well defined return type.
-pub trait Batched<E> {
-    /// The response produced by each homogeneous operation.
-    type Response: Send;
-
-    /// Executes these operations through a context supporting their operation kind.
-    fn batched(
-        self,
-        executor: &E,
-    ) -> impl Future<Output = Result<Vec<Self::Response>, OperationError>> + Send
-    where
-        Self: Sized;
-}
-
-impl<I, E> Batched<E> for I
-where
-    I: IntoIterator + Send,
-    I::Item: Operation<Ready> + 'static,
-    <I::Item as Operation<Ready>>::Response: 'static,
-    E: CreateBatch<<I::Item as Operation<Ready>>::Kind>,
-{
-    type Response = <I::Item as Operation<Ready>>::Response;
-
-    async fn batched(self, executor: &E) -> Result<Vec<Self::Response>, OperationError> {
-        let mut batch = executor.create_batch()?;
-        let keys = self
-            .into_iter()
-            .map(|operation| batch.push(operation))
-            .collect::<Vec<_>>();
-
-        let mut responses = batch.execute(executor).await?;
-        keys.into_iter()
-            .map(|key| responses.take(key).map_err(Into::into))
-            .collect()
-    }
-}
-
 /// To be able to have a [`BatchOperation`] stick a bunch of operations
 /// into a collection, we must be able to reference them by some common trait.
 /// While they all implement [`Operation`], the associated response makes them
 /// incompatible. So the response type must also be erased!
 type ErasedResponse = Box<dyn Any + Send>;
 
+/// An operation that has both its own type and its associated response erased.
+///
+/// The response becomes a `void*`-like structure that the rust runtime lets us
+/// cast safely by inserting type id checks. This relies on the fact that operations
+/// come out in the same order they go in - which the ADT backend guarantees.
 trait ErasedOperation: Send + Sync {
     fn request(&self, client: &Client<Ready>) -> Result<AdtRequest, OperationError>;
 
@@ -103,6 +57,7 @@ where
     O::Response: 'static,
 {
     fn request(&self, client: &Client<Ready>) -> Result<AdtRequest, OperationError> {
+        // `O` could also be `ErasedOperation` so we gotta be specific
         <O as Operation<Ready>>::request(self, client)
     }
 
@@ -112,17 +67,22 @@ where
     }
 }
 
-/// A heterogeneous group of ADT operations executed in one HTTP round trip.
+/// A kind-heterogeneous group of ADT operations executed in one HTTP round trip.
 ///
-/// Every operation in a batch uses a [`Ready`] client and the same operation
+/// Every operation in a batch uses a [`Ready`] executor and the same operation
 /// kind `K`. Individual response types remain available through the [`BatchKey`]
-/// returned by [`BatchOperation::push`]. The kind parameter prevents stateless
-/// and stateful operations from being mixed. Stateless batches execute through
-/// [`Client`], while stateful batches execute through [`super::UserSession`].
+/// returned by [`BatchOperation::push`].
 ///
-/// Construct this value through [`Client::batch`] or
-/// [`super::UserSession::batch`]. ADT executes its subrequests and returns their
-/// responses in request order.
+/// Create a batch operation through [`Client::batch`] or [`UserSession::batch`]
+/// such that it can automatically be bound to an operation kind `K`.
+///
+/// ADT executes its subrequests and returns their responses in request order.
+///
+/// If you have a collection of operations of the same type, in other words,
+/// they all share the same response, you may also use the [`Batched`] trait.
+///
+/// TODO: Implement max batch size and max worker count for parallelism even
+/// using batching, sweet middle spot for many operations
 pub struct BatchOperation<K: OperationKind> {
     identity: Arc<()>,
     endpoint: AdtUri,
@@ -208,7 +168,14 @@ where
             HeaderValue::from_str(&format!("{BATCH_MEDIA_TYPE}; boundary={boundary}"))
                 .expect("a UUID batch boundary is a valid Content-Type parameter"),
         );
-        request.set_body(encode_batch(&requests, &boundary));
+        let closing_boundary = format!("--{boundary}--");
+        request.set_body(
+            requests
+                .iter()
+                .flat_map(|request| request.format_batch_part(&boundary))
+                .chain(closing_boundary.bytes())
+                .collect::<Vec<_>>(),
+        );
         request.set_response_context_targets(targets);
         Ok(request)
     }
@@ -326,7 +293,7 @@ impl BatchResponses {
 ///
 /// This is needed so we can treat both, a [`UserSession`] and [`Client`] as
 /// capable of creating a batch for their associated statefulness.
-trait CreateBatch<K>: Executor<Ready, BatchOperation<K>>
+trait CreateBatch<K>: Execute<Ready, BatchOperation<K>>
 where
     K: OperationKind,
 {
@@ -342,6 +309,47 @@ impl CreateBatch<Stateless> for Client<Ready> {
 impl CreateBatch<Stateful> for UserSession<Ready> {
     fn create_batch(&self) -> Result<BatchOperation<Stateful>, CompatibilityError> {
         UserSession::batch(self)
+    }
+}
+
+/// Allows calling `T.batch()` on any homogenous collection of [`Operation`] `T`
+/// that implements [`IntoIterator`] and get back a [`Vec<T::Response>`] where
+/// `result[n]` is the response for operation `self[n]`.
+///
+/// This does not work on arrays of boxed, type erased operations as there is no
+/// well defined return type.
+pub trait Batched<E> {
+    type Response: Send;
+
+    fn batched(
+        self,
+        executor: &E,
+    ) -> impl Future<Output = Result<Vec<Self::Response>, OperationError>> + Send
+    where
+        Self: Sized;
+}
+
+impl<I, E> Batched<E> for I
+where
+    I: IntoIterator + Send,
+    I::Item: Operation<Ready> + 'static,
+    <I::Item as Operation<Ready>>::Response: 'static,
+    E: CreateBatch<<I::Item as Operation<Ready>>::Kind>,
+{
+    type Response = <I::Item as Operation<Ready>>::Response;
+
+    /// This is the main boilerplate this function saves us from writing
+    async fn batched(self, executor: &E) -> Result<Vec<Self::Response>, OperationError> {
+        let mut batch = executor.create_batch()?;
+        let keys = self
+            .into_iter()
+            .map(|operation| batch.push(operation))
+            .collect::<Vec<_>>();
+
+        let mut responses = batch.execute(executor).await?;
+        keys.into_iter()
+            .map(|key| responses.take(key).map_err(Into::into))
+            .collect()
     }
 }
 
@@ -393,60 +401,9 @@ pub enum BatchError {
     TypeMismatch { index: usize },
 }
 
-fn encode_batch(requests: &[AdtRequest], boundary: &str) -> Vec<u8> {
-    let marker = format!("--{boundary}");
-    let mut output = Vec::new();
-    output.extend_from_slice(marker.as_bytes());
-    output.extend_from_slice(CRLF);
-
-    for (index, request) in requests.iter().enumerate() {
-        output.extend_from_slice(b"Content-Type: application/http\r\n");
-        output.extend_from_slice(b"content-transfer-encoding: binary\r\n\r\n");
-        output.extend_from_slice(request.method().as_str().as_bytes());
-        output.push(b' ');
-        output.extend_from_slice(encoded_target(request).as_bytes());
-        output.extend_from_slice(b" HTTP/1.1\r\n");
-
-        for name in request.headers().keys() {
-            for value in request.headers().get_all(name) {
-                output.extend_from_slice(name.as_str().as_bytes());
-                output.push(b':');
-                output.extend_from_slice(value.as_bytes());
-                output.extend_from_slice(CRLF);
-            }
-        }
-        output.extend_from_slice(CRLF);
-
-        if !request.body().is_empty() {
-            output.extend_from_slice(request.body());
-            output.extend_from_slice(CRLF);
-        }
-
-        output.extend_from_slice(marker.as_bytes());
-        if index + 1 == requests.len() {
-            output.extend_from_slice(b"--");
-        } else {
-            output.extend_from_slice(CRLF);
-        }
-    }
-
-    output
-}
-
-fn encoded_target(request: &AdtRequest) -> String {
-    let mut target = request.target().as_str().to_owned();
-    if request.query().is_empty() {
-        return target;
-    }
-
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (name, value) in request.query() {
-        serializer.append_pair(name, value);
-    }
-    target.push('?');
-    target.push_str(&serializer.finish());
-    target
-}
+const BINARY: &str = "binary";
+const CRLF: &[u8] = b"\r\n";
+const MAX_PART_HEADERS: usize = 128;
 
 fn response_boundary(headers: &HeaderMap) -> Result<String, BatchError> {
     let value = headers
@@ -847,7 +804,11 @@ mod tests {
         post.set_content_type("application/xml");
         post.set_body(b"<value/>".to_vec());
 
-        let encoded = encode_batch(&[get, post], "batch_test");
+        let encoded = [get, post]
+            .iter()
+            .flat_map(|request| request.format_batch_part("batch_test"))
+            .chain(b"--batch_test--".iter().copied())
+            .collect::<Vec<_>>();
 
         assert_eq!(
             encoded,

@@ -59,7 +59,7 @@ pub use objects::{
     Package, Program, RepositoryObject, Source,
 };
 pub use operation::{
-    BatchError, BatchKey, BatchOperation, BatchResponses, Batched, Conditional, Executor,
+    BatchError, BatchKey, BatchOperation, BatchResponses, Batched, Conditional, Execute,
     IfNoneMatch, Operation, OperationContext, OperationKind, OperationResponse, QueryMode,
     Stateful, Stateless, Unconditional, UserSession,
 };

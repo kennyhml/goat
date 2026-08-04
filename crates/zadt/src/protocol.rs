@@ -176,6 +176,45 @@ impl AdtRequest {
         self.body = body.into();
     }
 
+    /// Formats this requests content as a batch part of a `multipart/mixed`
+    /// payload. The boundary must be provided by the caller to make that
+    /// responsibility explicit.
+    pub(crate) fn format_batch_part(&self, boundary: &str) -> Vec<u8> {
+        let mut output = Vec::new();
+        output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        output.extend_from_slice(b"Content-Type: application/http\r\n");
+        output.extend_from_slice(b"content-transfer-encoding: binary\r\n\r\n");
+        output.extend_from_slice(self.method.as_str().as_bytes());
+        output.push(b' ');
+        output.extend_from_slice(self.target.as_str().as_bytes());
+        if !self.query.is_empty() {
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            for (name, value) in &self.query {
+                serializer.append_pair(name, value);
+            }
+            output.push(b'?');
+            output.extend_from_slice(serializer.finish().as_bytes());
+        }
+        output.extend_from_slice(b" HTTP/1.1\r\n");
+
+        for name in self.headers.keys() {
+            for value in self.headers.get_all(name) {
+                output.extend_from_slice(name.as_str().as_bytes());
+                output.push(b':');
+                output.extend_from_slice(value.as_bytes());
+                output.extend_from_slice(b"\r\n");
+            }
+        }
+        output.extend_from_slice(b"\r\n");
+
+        if !self.body.is_empty() {
+            output.extend_from_slice(&self.body);
+            output.extend_from_slice(b"\r\n");
+        }
+
+        output
+    }
+
     /// Captures the local metadata needed to decode this requests response.
     ///
     /// Custom executors should retain this value before giving the request to a

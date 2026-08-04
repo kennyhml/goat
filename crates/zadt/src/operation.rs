@@ -169,7 +169,7 @@ impl OperationResponse {
 /// tunnel a serialized raw HTTP message.
 ///
 /// The operation's [`OperationKind`] and the client state determine which
-/// [`Executor`] can run it.
+/// [`Execute`] can run it.
 ///
 /// Consumers of the API should construct operations manually only in exceptional
 /// cases. In most scenarios, a callable operation can be constructed - or at least
@@ -184,13 +184,13 @@ pub trait Operation<S: ClientState>: Send + Sync {
     /// Converts the raw transport response into this operation's response type.
     fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError>;
 
-    /// Convenient forward of [`Executor::execute`] to the operation itself
+    /// Convenient forward of [`Execute::execute`] to the operation itself
     fn execute<E>(
         &self,
         executor: &E,
     ) -> impl Future<Output = Result<Self::Response, OperationError>> + Send
     where
-        E: Executor<S, Self>,
+        E: Execute<S, Self>,
         Self: Sized,
     {
         executor.execute(self)
@@ -199,7 +199,7 @@ pub trait Operation<S: ClientState>: Send + Sync {
 
 /// An execution context capable of running operation `O` with client state `S`.
 ///
-/// `Operation` describes how to build and decode a request, while `Executor`
+/// `Operation` describes how to build and decode a request, while `Execute`
 /// controls how that request is carried out. This separates the operations
 /// protocol contract from execution concerns such as user-session affinity,
 /// session headers, serialization, and transport access.
@@ -215,7 +215,7 @@ pub trait Operation<S: ClientState>: Send + Sync {
 /// the required `sap-contextid` and delegating request delivery to its client.
 ///
 /// Callers should use [`Operation::execute`] rather than invoking this directly.
-pub trait Executor<S, O>: Send + Sync
+pub trait Execute<S, O>: Send + Sync
 where
     S: ClientState,
     O: Operation<S>,
@@ -249,7 +249,7 @@ pub struct UserSession<S: ClientState> {
 }
 
 // Execution of a stateless request
-impl<S, O> Executor<S, O> for Client<S>
+impl<S, O> Execute<S, O> for Client<S>
 where
     S: ClientState,
     O: Operation<S, Kind = Stateless>,
@@ -262,8 +262,8 @@ where
     }
 }
 
-// Execution of a stateful request
-impl<S, O> Executor<S, O> for UserSession<S>
+// Execution of a stateful request, maybe we just restrict this to Client<Ready>?
+impl<S, O> Execute<S, O> for UserSession<S>
 where
     S: ClientState,
     O: Operation<S, Kind = Stateful>,
