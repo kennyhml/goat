@@ -35,8 +35,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build()?
         .execute(&client)
         .await?;
+    let props = query.requests[0]
+        .properties_query()
+        .execute(&client)
+        .await?;
 
-    println!("{:#?}", query);
+    println!("{:#?}", props);
 
     Ok(())
 }

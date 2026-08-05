@@ -33,7 +33,8 @@ pub use api::repository::{
 };
 pub use api::session::{Logon, SessionMediaVersion};
 pub use api::transports::{
-    QueryTransportKind, TransportsQuery, TransportsQueryBuilder, TransportsQueryBuilderError,
+    QueryTransportKind, TransportPropertiesQuery, TransportsQuery, TransportsQueryBuilder,
+    TransportsQueryBuilderError,
 };
 pub use client::{Client, ClientState, Initial, Ready};
 pub use compatibility::{CompatibilityError, MediaVersionNegotiation, negotiate};

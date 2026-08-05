@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use serde::Deserialize;
 
@@ -43,14 +43,36 @@ impl fmt::Display for TransportKind {
     }
 }
 
-/// An open CTS transport status value such as `D` or `R`.
+/// An open CTS transport status value.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct TransportStatus(String);
+pub struct TransportStatus(Cow<'static, str>);
 
 impl TransportStatus {
+    /// The request can be modified (`D`).
+    pub const MODIFIABLE: Self = Self(Cow::Borrowed("D"));
+
+    /// The request can be modified but is protected (`L`).
+    pub const MODIFIABLE_PROTECTED: Self = Self(Cow::Borrowed("L"));
+
+    /// Release of the request has started (`O`).
+    pub const RELEASE_STARTED: Self = Self(Cow::Borrowed("O"));
+
+    /// The request has been released (`R`).
+    pub const RELEASED: Self = Self(Cow::Borrowed("R"));
+
+    /// The request is released with import protection for repaired objects (`N`).
+    pub const RELEASED_WITH_IMPORT_PROTECTION: Self = Self(Cow::Borrowed("N"));
+
+    /// The request is being prepared for release (`P`).
+    pub const RELEASE_PREPARATION: Self = Self(Cow::Borrowed("P"));
+
     /// Returns the exact CTS `TRSTATUS` value.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    fn parse(value: String) -> Self {
+        Self(Cow::Owned(value))
     }
 }
 
@@ -69,7 +91,7 @@ pub struct TransportRequest {
     /// The request's CTS transport function.
     pub kind: TransportKind,
 
-    /// The raw CTS transport status.
+    /// The CTS transport status.
     pub status: TransportStatus,
 
     /// The transport target system, when assigned.
@@ -92,6 +114,14 @@ pub struct TransportRequest {
 
     /// The repository identifier, when supplied.
     pub repository_id: Option<String>,
+}
+
+impl TransportRequest {
+    pub(crate) fn parse(body: &[u8]) -> Result<Self, CtsError> {
+        let raw: RawTransportRequestResponse =
+            serde_xml_rs::from_reader(body).map_err(CtsError::InvalidTransportResponse)?;
+        Ok(raw.values.data.into())
+    }
 }
 
 /// Transport requests returned by a [`crate::TransportsQuery`].
@@ -136,7 +166,7 @@ impl From<RawTransportRequest> for TransportRequest {
         Self {
             number: raw.number,
             kind: TransportKind::parse(raw.kind),
-            status: TransportStatus(raw.status),
+            status: TransportStatus::parse(raw.status),
             target_system: non_empty(raw.target_system),
             owner: raw.owner,
             date: raw.date,
@@ -157,6 +187,19 @@ fn non_empty(value: String) -> Option<String> {
 struct RawTransportRequests {
     #[serde(rename = "asx:values")]
     values: RawTransportValues,
+}
+
+#[derive(Deserialize)]
+#[serde(rename = "asx:abap")]
+struct RawTransportRequestResponse {
+    #[serde(rename = "asx:values")]
+    values: RawTransportRequestValue,
+}
+
+#[derive(Deserialize)]
+struct RawTransportRequestValue {
+    #[serde(rename = "DATA")]
+    data: RawTransportRequest,
 }
 
 #[derive(Deserialize)]
@@ -209,6 +252,7 @@ mod tests {
     use super::*;
 
     const TRANSPORTS_XML: &[u8] = include_bytes!("../../tests/fixtures/transport-requests.xml");
+    const TRANSPORT_XML: &[u8] = include_bytes!("../../tests/fixtures/transport-request.xml");
 
     #[test]
     fn parses_transport_request_headers_and_preserves_unknown_functions() {
@@ -230,5 +274,30 @@ mod tests {
     #[test]
     fn treats_an_empty_transport_response_as_an_empty_list() {
         assert!(TransportRequests::parse(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parses_a_single_transport_request() {
+        let transport = TransportRequest::parse(TRANSPORT_XML).unwrap();
+
+        assert_eq!(transport.number, "DEVK900001");
+        assert_eq!(transport.kind, TransportKind::Workbench);
+        assert_eq!(transport.client, None);
+        assert_eq!(transport.description, "Workbench request");
+    }
+
+    #[test]
+    fn maps_standard_transport_statuses_and_preserves_custom_values() {
+        for (value, expected) in [
+            ("D", TransportStatus::MODIFIABLE),
+            ("L", TransportStatus::MODIFIABLE_PROTECTED),
+            ("O", TransportStatus::RELEASE_STARTED),
+            ("R", TransportStatus::RELEASED),
+            ("N", TransportStatus::RELEASED_WITH_IMPORT_PROTECTION),
+            ("P", TransportStatus::RELEASE_PREPARATION),
+        ] {
+            assert_eq!(TransportStatus::parse(value.to_owned()), expected);
+        }
+        assert_eq!(TransportStatus::parse("Z".to_owned()).as_str(), "Z");
     }
 }

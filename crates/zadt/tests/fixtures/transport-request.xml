@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
+    <asx:values>
+        <DATA>
+            <TRKORR>DEVK900001</TRKORR>
+            <TRFUNCTION>K</TRFUNCTION>
+            <TRSTATUS>D</TRSTATUS>
+            <TARSYSTEM />
+            <AS4USER>DEVELOPER</AS4USER>
+            <AS4DATE>2026-08-05</AS4DATE>
+            <AS4TIME>12:00:00</AS4TIME>
+            <AS4TEXT>Workbench request</AS4TEXT>
+            <CLIENT />
+            <REPOID />
+        </DATA>
+    </asx:values>
+</asx:abap>
