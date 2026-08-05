@@ -30,10 +30,10 @@ The client checks the discovery collection for the stable `Program` schema and f
 that its location is advertised as `/sap/bc/adt/programs/programs`. Another advantage is that supported
 media-types can be negotiated and chosen dynamically while remaining fully typed.
 
-Its worth noting that HATEOAS does not mean the client does not know about the semantics of resources.
+Its worth noting that HATEOAS doesnt mean the client does not know about the semantics of resources.
 Operations and responsens remain fully typed. It mainly lets the provider change locations and 
-syntactic details of a resource, such as the uri parameter for a template action, without breaking
-clients relying on it.
+syntactic details of a resource, such as the location (not the name!) of a uri parameter for a 
+template action, without breaking clients relying on it.
 
 ### Typing
 
@@ -65,7 +65,7 @@ implementations. Currently only, HTTP transport using `reqwest` is implemented o
 This is more of a flex about how awesome rust is and, unless you plan to contribute, can probably be
 ignored.
 
-The most important trait in `ZADT` is arguably the `Operation` trait, defines as
+The most important trait in `ZADT` is the `Operation` trait, defines as
 
 ```rust,ignore
 pub trait Operation<S: ClientState>: Send + Sync {
@@ -79,53 +79,35 @@ pub trait Operation<S: ClientState>: Send + Sync {
 ```
 
 An operation is effectively a request which its implementor can construct in the `request` method.
-It is generic over the client state: 
-```rust,ignore
-impl ClientState for Initial {}
-impl ClientState for Ready {}
-```
-... and the operation kind:
-```rust,ignore
-impl OperationKind for Stateless {}
-impl OperationKind for Stateful {}
-```
+It is generic over the client state `S`, which defines whether the client has performed discovery
+and can provide operations with a collection, and the operation kind `OperationKind` which defines
+whether an operation is `Stateful` or `Statelss`.
 
-With that in place, an executor can be defined as
+With that in place, an execution trait can be defined as
 ```rust,ignore
-pub trait Executor<S, O>: Send + Sync
+pub trait Execute<S, O>: Send + Sync
 where
     S: ClientState,
     O: Operation<S>,
 {
-    fn execute(
-        &self,
-        operation: &O,
-    ) -> impl Future<Output = Result<O::Response, OperationError>> + Send;
+    fn execute(&self, operation: &O) -> impl Future<Output = Result<O::Response, OperationError>> + Send;
 }
 ```
-which effectively means that a `Client` with state `S` can execute operations for state `S`.
-That means, an operation implementation
-```rust,ignore
-impl Operation<Ready> for ProgramRun { ... }
-```
-Cannot be invoked by `Client<Initial>`. This provides a compile time invariant for operations
-that rely on the discovery data to dispatch. Of course, entry point operations such as the 
-discovery itself, are valid for any client state.
+which means that a `Client` with state `S` can execute operations for state `S`. Cannot be invoked by 
+`Client<Initial>`. This provides a compile time invariant for operations that rely on the discovery 
+data to dispatch. Of course, entry point operations such as the discovery itself, are valid for any client state.
 
-The associated type `Kind` enforces the next invariant: calling stateful operations 
-outside of a stateful context. They **look** like they work, but they dont! For instance,
-locking gives you a handle back, but that handle already expired by the time you got that response.
-
-So, we need to create a user session that wraps a client first
+The associated type `Kind` enforces the next invariant, which is calling stateful operations outside
+of a stateful context. To implement that, a user session wraps a client
 ```rust,ignore
 pub struct UserSession<S: ClientState> {
     client: Client<S>,
     state: Mutex<UserSessionState>,
 }
 ```
-Then, implement the stateless executor only for `UserSession<S>`:
+And then we implement the stateful execution only for `UserSession<S>`:
 ```rust,ignore
-impl<S, O> Executor<S, O> for UserSession<S>
+impl<S, O> Executo<S, O> for UserSession<S>
 where
     S: ClientState,
     O: Operation<S, Kind = Stateful>,
@@ -135,9 +117,42 @@ where
     }
 }
 ```
-Of course, once again, stateless operations can just dispatched by any executor.
+The best part about this design is that it allows for some sweet decorator patterns. For instance,
+etag handling can simply be implemented like this:
+```rust,ignore
+pub enum Revalidation<T> {
+    Modified(T),
+    NotModified { etag: Option<EntityTag> },
+}
 
-The best part about this design is that it allows us to build some sweet decorators
-around the operation trait, because the decorator can easily implement the trait
-itself to forward behavior. This drives batching, paging and etag handling. More 
-on that when I feel like it :D
+pub struct IfNoneMatch<O> {
+    inner: O,
+    etag: EntityTag,
+}
+
+impl<S, O> Operation<S> for IfNoneMatch<O>
+where
+    S: ClientState,
+    O: Operation<S>,
+{
+    type Response = Revalidation<O::Response>;
+    type Kind = O::Kind;
+
+    fn request(&self, client: &Client<S>) -> Result<AdtRequest, OperationError> {
+        let mut request = self.inner.request(client)?;
+        request.set_cache_revalidation(Some(&self.etag));
+        Ok(request)
+    }
+
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        if response.status() == StatusCode::NOT_MODIFIED {
+            return Ok(Revalidation::NotModified {
+                etag: response.entity_tag(),
+            });
+        }
+
+        self.inner.decode(response).map(Revalidation::Modified)
+    }
+}
+```
+This can also drive batching, paging, retry behavior and much more.
