@@ -10,7 +10,7 @@ pub(crate) use discovery::parse_capabilities;
 pub(crate) use object::parse_lock_handle;
 pub(crate) use repository::RepositoryContentRequest;
 pub(crate) use session::parse_session_information;
-pub(crate) use transports::TransportCreateRequest;
+pub(crate) use transports::{TransportCheckRequest, TransportCreateRequest};
 
 pub use discovery::{Capabilities, Category, Collection, TemplateLink, Workspace};
 pub use object::{AccessMode, LockHandle, SourceCode};
@@ -33,6 +33,7 @@ pub use repository::{
 };
 pub use session::{SessionInformation, SessionUri, SystemInformationLink};
 pub use transports::{
-    TransportCreation, TransportCreationMessage, TransportKind, TransportRequest,
-    TransportRequests, TransportStatus,
+    TransportCheckMessage, TransportCheckResult, TransportCreation, TransportCreationMessage,
+    TransportKind, TransportObjectKey, TransportObjectLock, TransportProject, TransportRequest,
+    TransportRequests, TransportStatus, TransportTask,
 };

@@ -82,6 +82,12 @@
                 term="transports"
                 scheme="http://www.sap.com/adt/categories/cts" />
         </app:collection>
+        <app:collection href="/sap/bc/adt/cts/transportchecks">
+            <atom:title>Transport Checks</atom:title>
+            <atom:category
+                term="transportchecks"
+                scheme="http://www.sap.com/adt/categories/cts" />
+        </app:collection>
     </app:workspace>
     <app:workspace>
         <atom:title>Repository Information</atom:title>

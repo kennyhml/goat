@@ -2,8 +2,8 @@ use std::{env, error::Error, io};
 
 use tracing_subscriber::EnvFilter;
 use zadt::{
-    Class, Client, Operation, Program, ReqwestTransport, TransportCreateBuilder, TransportExt,
-    TransportsQueryBuilder,
+    AdtUri, Class, Client, Operation, Program, ReqwestTransport, TransportCheck,
+    TransportCheckOperation, TransportCreateBuilder, TransportExt, TransportsQueryBuilder,
 };
 
 #[tokio::main]
@@ -32,9 +32,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_body_logging(64 * 1024);
     let client = Client::new(transport).discover().await?;
 
-    let query = TransportCreateBuilder::default()
-        .package("$TMP")
-        .description("This is a test")
+    let query = TransportCheck::builder()
+        .uri(AdtUri::parse("sap/bc/adt/oo/classes/zmyclass")?)
+        .package("ZTTT")
+        .operation(TransportCheckOperation::Insert)
         .build()?
         .execute(&client)
         .await?;

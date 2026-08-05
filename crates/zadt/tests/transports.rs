@@ -4,13 +4,17 @@ use httpmock::Mock;
 use httpmock::prelude::*;
 use zadt::{
     AdtUri, Client, Operation, OperationError, QueryTransportKind, Ready, ReqwestTransport,
-    ResponseError, TransportCreate, TransportKind, TransportPropertiesQuery, TransportsQuery,
+    ResponseError, TransportCheck, TransportCheckLinkUpMode, TransportCheckOperation,
+    TransportCreate, TransportKind, TransportPropertiesQuery, TransportsQuery,
 };
 
 const DISCOVERY_XML: &str = include_str!("fixtures/discovery.xml");
 const CORE_DISCOVERY_XML: &str = include_str!("fixtures/core-discovery.xml");
 const TRANSPORTS_XML: &str = include_str!("fixtures/transport-requests.xml");
 const TRANSPORT_XML: &str = include_str!("fixtures/transport-request.xml");
+const TRANSPORT_CHECK_XML: &str = include_str!("fixtures/transport-check.xml");
+const TRANSPORT_CHECK_MEDIA_TYPE: &str =
+    "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.transport.service.checkData";
 const TRANSPORTS_MEDIA_TYPE: &str =
     "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CorrectionRequests";
 const TRANSPORT_MEDIA_TYPE: &str =
@@ -88,6 +92,88 @@ async fn ready_client(server: &MockServer) -> Client<Ready> {
         .build()
         .unwrap();
     Client::new(transport).discover().await.unwrap()
+}
+
+#[tokio::test]
+async fn transport_check_uses_the_discovered_endpoint_and_link_up_mode() {
+    let server = MockServer::start_async().await;
+    let _discovery = mock_discovery(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
+    let csrf = mock_csrf(&server).await;
+    let check = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/sap/bc/adt/cts/transportchecks")
+                .query_param("linkUpMode", "MultipleRequests")
+                .header("accept", TRANSPORT_CHECK_MEDIA_TYPE)
+                .header("content-type", TRANSPORT_CHECK_MEDIA_TYPE)
+                .header("x-csrf-token", "CSRF-CTS")
+                .body_contains("<PGMID")
+                .body_contains("<OBJECT")
+                .body_contains("<OBJECTNAME")
+                .body_contains("<DEVCLASS>ZPACKAGE</DEVCLASS>")
+                .body_contains("<SUPER_PACKAGE>ZROOT</SUPER_PACKAGE>")
+                .body_contains("<RECORD_CHANGES>X</RECORD_CHANGES>")
+                .body_contains("<OPERATION>I</OPERATION>")
+                .body_contains(
+                    "<URI>/sap/bc/adt/oo/classes/zcl_example/includes/testclasses</URI>",
+                );
+            then.status(200)
+                .header("content-type", TRANSPORT_CHECK_MEDIA_TYPE)
+                .body(TRANSPORT_CHECK_XML);
+        })
+        .await;
+
+    let client = ready_client(&server).await;
+    let result = TransportCheck::builder()
+        .uri(AdtUri::parse("/sap/bc/adt/oo/classes/zcl_example/includes/testclasses").unwrap())
+        .operation(TransportCheckOperation::Insert)
+        .package("ZPACKAGE")
+        .super_package("ZROOT")
+        .record_changes(true)
+        .link_up_mode(TransportCheckLinkUpMode::MultipleRequests)
+        .build()
+        .unwrap()
+        .execute(&client)
+        .await
+        .unwrap();
+
+    assert_eq!(result.object.object_type, "CINC");
+    assert_eq!(result.requests[0].number, "DEVK900001");
+    assert_eq!(result.locks[0].tasks[0].number, "DEVK900002");
+    csrf.assert_async().await;
+    check.assert_async().await;
+}
+
+#[tokio::test]
+async fn transport_check_rejects_an_unexpected_response_media_type() {
+    let server = MockServer::start_async().await;
+    let _discovery = mock_discovery(&server).await;
+    let _core_discovery = mock_core_discovery(&server).await;
+    let _csrf = mock_csrf(&server).await;
+    let _check = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/sap/bc/adt/cts/transportchecks");
+            then.status(200)
+                .header("content-type", TRANSPORTS_MEDIA_TYPE)
+                .body(TRANSPORT_CHECK_XML);
+        })
+        .await;
+
+    let client = ready_client(&server).await;
+    let error = TransportCheck::new(
+        AdtUri::parse("/sap/bc/adt/oo/classes/zcl_example").unwrap(),
+        TransportCheckOperation::Modify,
+    )
+    .execute(&client)
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        OperationError::Response(ResponseError::UnsupportedContentType { content_type, .. })
+            if content_type == TRANSPORTS_MEDIA_TYPE
+    ));
 }
 
 #[tokio::test]

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
+    <asx:values>
+        <DATA>
+            <PGMID>LIMU</PGMID>
+            <OBJECT>CINC</OBJECT>
+            <OBJECTNAME>ZCL_EXAMPLE==============CCAU</OBJECTNAME>
+            <OPERATION>I</OPERATION>
+            <DEVCLASS>ZPACKAGE</DEVCLASS>
+            <CTEXT>Example package</CTEXT>
+            <KORRFLAG>X</KORRFLAG>
+            <AS4USER />
+            <PDEVCLASS>ZDEV</PDEVCLASS>
+            <DLVUNIT>HOME</DLVUNIT>
+            <NAMESPACE />
+            <SUPER_PACKAGE>ZROOT</SUPER_PACKAGE>
+            <RECORD_CHANGES>X</RECORD_CHANGES>
+            <RESULT>S</RESULT>
+            <RECORDING>X</RECORDING>
+            <EXISTING_REQ_ONLY>X</EXISTING_REQ_ONLY>
+            <MESSAGES>
+                <CTS_MESSAGE>
+                    <SEVERITY>S</SEVERITY>
+                    <SPRSL>E</SPRSL>
+                    <ARBGB>TR</ARBGB>
+                    <MSGNR>007</MSGNR>
+                    <VARIABLES>
+                        <CTS_VARIABLE><VARIABLE>Z</VARIABLE></CTS_VARIABLE>
+                        <CTS_VARIABLE><VARIABLE>R3TR</VARIABLE></CTS_VARIABLE>
+                        <CTS_VARIABLE><VARIABLE>CLAS</VARIABLE></CTS_VARIABLE>
+                        <CTS_VARIABLE><VARIABLE>ZCL_EXAMPLE</VARIABLE></CTS_VARIABLE>
+                    </VARIABLES>
+                    <TEXT>Example transport message</TEXT>
+                </CTS_MESSAGE>
+            </MESSAGES>
+            <REQUESTS>
+                <CTS_REQUEST>
+                    <REQ_HEADER>
+                        <TRKORR>DEVK900001</TRKORR>
+                        <TRFUNCTION>K</TRFUNCTION>
+                        <TRSTATUS>D</TRSTATUS>
+                        <TARSYSTEM>QAS</TARSYSTEM>
+                        <AS4USER>DEVELOPER</AS4USER>
+                        <AS4DATE>2026-08-05</AS4DATE>
+                        <AS4TIME>19:15:35</AS4TIME>
+                        <AS4TEXT>Example request</AS4TEXT>
+                        <CLIENT>001</CLIENT>
+                        <REPOID>ABAP</REPOID>
+                    </REQ_HEADER>
+                    <REQ_ATTRS />
+                    <TASK_HEADERS />
+                </CTS_REQUEST>
+            </REQUESTS>
+            <LOCKS>
+                <CTS_OBJECT_LOCK>
+                    <OBJECT_KEY>
+                        <PGMID>LIMU</PGMID>
+                        <OBJECT>CINC</OBJECT>
+                        <OBJ_NAME>ZCL_EXAMPLE==============CCAU</OBJ_NAME>
+                    </OBJECT_KEY>
+                    <LOCK_HOLDER>
+                        <REQ_HEADER>
+                            <TRKORR>DEVK900001</TRKORR>
+                            <TRFUNCTION>K</TRFUNCTION>
+                            <TRSTATUS>D</TRSTATUS>
+                            <TARSYSTEM>QAS</TARSYSTEM>
+                            <AS4USER>DEVELOPER</AS4USER>
+                            <AS4DATE>2026-08-05</AS4DATE>
+                            <AS4TIME>19:15:35</AS4TIME>
+                            <AS4TEXT>Example request</AS4TEXT>
+                            <CLIENT>001</CLIENT>
+                            <REPOID>ABAP</REPOID>
+                        </REQ_HEADER>
+                        <REQ_ATTRS />
+                        <TASK_HEADERS>
+                            <CTS_TASK_HEADER>
+                                <TRKORR>DEVK900002</TRKORR>
+                                <TRFUNCTION>R</TRFUNCTION>
+                                <TRSTATUS>D</TRSTATUS>
+                                <AS4USER>DEVELOPER</AS4USER>
+                                <AS4DATE>2026-08-05</AS4DATE>
+                                <AS4TIME>19:16:00</AS4TIME>
+                                <AS4TEXT>Developer task</AS4TEXT>
+                            </CTS_TASK_HEADER>
+                        </TASK_HEADERS>
+                    </LOCK_HOLDER>
+                </CTS_OBJECT_LOCK>
+            </LOCKS>
+            <TADIRDEVC>ZPACKAGE</TADIRDEVC>
+            <URI>/sap/bc/adt/oo/classes/zcl_example/includes/testclasses</URI>
+            <CTS_PROJECTS>
+                <SADT_CTS_PROJECT>
+                    <TRKORR>DEVK900001</TRKORR>
+                    <EXTERNALID>PROJECT-1</EXTERNALID>
+                    <DESCRIPTN>Example project</DESCRIPTN>
+                </SADT_CTS_PROJECT>
+            </CTS_PROJECTS>
+        </DATA>
+    </asx:values>
+</asx:abap>

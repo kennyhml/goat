@@ -33,8 +33,10 @@ pub use api::repository::{
 };
 pub use api::session::{Logon, SessionMediaVersion};
 pub use api::transports::{
-    QueryTransportKind, TransportCreate, TransportCreateBuilder, TransportCreateBuilderError,
-    TransportPropertiesQuery, TransportsQuery, TransportsQueryBuilder, TransportsQueryBuilderError,
+    QueryTransportKind, TransportCheck, TransportCheckBuilder, TransportCheckBuilderError,
+    TransportCheckLinkUpMode, TransportCheckOperation, TransportCreate, TransportCreateBuilder,
+    TransportCreateBuilderError, TransportPropertiesQuery, TransportsQuery, TransportsQueryBuilder,
+    TransportsQueryBuilderError,
 };
 pub use client::{Client, ClientState, Initial, Ready};
 pub use compatibility::{CompatibilityError, MediaVersionNegotiation, negotiate};
@@ -55,9 +57,10 @@ pub use models::{
     RepositoryObjectEntry, RepositoryObjectProperties, RepositoryObjectSummary,
     RepositoryObjectType, RepositoryPreselection, RepositoryPreselectionInfo, RepositoryProperty,
     RepositoryVirtualFolder, SessionInformation, SessionUri, SourceCode, SyntaxConfiguration,
-    SyntaxLanguage, SystemInformationLink, TemplateLink, TransportCreation,
-    TransportCreationMessage, TransportKind, TransportRequest, TransportRequests, TransportStatus,
-    Workspace,
+    SyntaxLanguage, SystemInformationLink, TemplateLink, TransportCheckMessage,
+    TransportCheckResult, TransportCreation, TransportCreationMessage, TransportKind,
+    TransportObjectKey, TransportObjectLock, TransportProject, TransportRequest, TransportRequests,
+    TransportStatus, TransportTask, Workspace,
 };
 pub use objects::{
     Class, ClassSourceComponent, GlobalWorkbenchType, Include, InvalidWorkbenchType,

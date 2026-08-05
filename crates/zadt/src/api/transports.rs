@@ -4,14 +4,22 @@ use http::{Method, StatusCode, header};
 use crate::{
     AdtRequest, AdtUri, CategoryId, Client, CtsError, MediaVersionNegotiation, ObjectError,
     Operation, OperationError, OperationResponse, PostAction, Ready, ResponseError, Stateless,
-    TransportCreation, TransportKind, TransportRequest, TransportRequests,
-    models::TransportCreateRequest, target::CollectionTarget, vocabulary::query_parameter,
+    TransportCheckResult, TransportCreation, TransportKind, TransportRequest, TransportRequests,
+    models::{TransportCheckRequest, TransportCreateRequest},
+    target::CollectionTarget,
+    vocabulary::query_parameter,
 };
 
 const TRANSPORTS_CATEGORY: CategoryId = CategoryId {
     scheme: "http://www.sap.com/adt/categories/cts",
     term: "transports",
 };
+const TRANSPORT_CHECKS_CATEGORY: CategoryId = CategoryId {
+    scheme: "http://www.sap.com/adt/categories/cts",
+    term: "transportchecks",
+};
+const TRANSPORT_CHECK_MEDIA_TYPE: &str =
+    "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.transport.service.checkData";
 const TRANSPORT_REQUESTS_MEDIA_TYPE: &str =
     "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CorrectionRequests";
 const TRANSPORT_REQUEST_MEDIA_TYPE: &str =
@@ -23,6 +31,17 @@ const TRANSPORT_CREATE_V1_MEDIA_TYPE: &str =
 const TRANSPORT_CREATE_RESULT_MEDIA_TYPE: &str =
     "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CorrectionRequestResult";
 const PLAIN_TEXT_MEDIA_TYPE: &str = "text/plain";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TransportCheckMediaType;
+
+impl MediaVersionNegotiation for TransportCheckMediaType {
+    const SUPPORTED: &'static [Self] = &[Self];
+
+    fn media_type(self) -> &'static str {
+        TRANSPORT_CHECK_MEDIA_TYPE
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TransportRequestsMediaType;
@@ -91,6 +110,151 @@ impl MediaVersionNegotiation for PlainTextMediaType {
 
     fn media_type(self) -> &'static str {
         PLAIN_TEXT_MEDIA_TYPE
+    }
+}
+
+/// The repository operation evaluated by a transport check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportCheckOperation {
+    /// Checks recording while creating a repository object (`OPERATION=I`).
+    Insert,
+
+    /// Checks recording while modifying an existing object (empty `OPERATION`).
+    Modify,
+}
+
+impl TransportCheckOperation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Insert => "I",
+            Self::Modify => "",
+        }
+    }
+}
+
+/// Additional request-linking behavior supported by a transport check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum TransportCheckLinkUpMode {
+    /// Allows ADT to return relevant requests for separately recorded subobjects.
+    MultipleRequests,
+}
+
+impl TransportCheckLinkUpMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MultipleRequests => "MultipleRequests",
+        }
+    }
+}
+
+/// Checks whether and where a repository operation must be recorded in CTS.
+///
+/// The backend maps the ADT resource URI to a CTS object key and returns
+/// candidate requests, existing locks, and diagnostic messages. Link-up mode
+/// enables the multi-request workflow used for compound objects such as ABAP
+/// classes.
+#[derive(Builder, Clone, Debug)]
+#[builder(pattern = "owned", setter(into))]
+pub struct TransportCheck {
+    /// The ADT resource being created or modified.
+    uri: AdtUri,
+
+    /// Whether the resource is being inserted or modified.
+    operation: TransportCheckOperation,
+
+    /// Optional package context (`DEVCLASS`).
+    #[builder(default, setter(strip_option))]
+    package: Option<String>,
+
+    /// Optional super-package context used while creating packages.
+    #[builder(default, setter(strip_option))]
+    super_package: Option<String>,
+
+    /// Explicit package recording choice (`RECORD_CHANGES`).
+    #[builder(default, setter(strip_option))]
+    record_changes: Option<bool>,
+
+    /// Optional request link-up behavior.
+    #[builder(default, setter(strip_option))]
+    link_up_mode: Option<TransportCheckLinkUpMode>,
+}
+
+impl TransportCheck {
+    const TARGET: CollectionTarget = CollectionTarget::new(TRANSPORT_CHECKS_CATEGORY);
+
+    /// Creates a transport check for one repository operation.
+    pub fn new(uri: AdtUri, operation: TransportCheckOperation) -> Self {
+        Self {
+            uri,
+            operation,
+            package: None,
+            super_package: None,
+            record_changes: None,
+            link_up_mode: None,
+        }
+    }
+
+    /// Creates a configurable transport-check builder.
+    pub fn builder() -> TransportCheckBuilder {
+        TransportCheckBuilder::default()
+    }
+}
+
+impl Operation<Ready> for TransportCheck {
+    type Response = TransportCheckResult;
+    type Kind = Stateless;
+
+    fn request(&self, client: &Client<Ready>) -> Result<AdtRequest, OperationError> {
+        let body = TransportCheckRequest::new(
+            &self.uri,
+            self.operation.as_str(),
+            self.package.as_deref(),
+            self.super_package.as_deref(),
+            self.record_changes.unwrap_or_default(),
+        )
+        .serialize()?;
+
+        let mut request = Self::TARGET.request(client, Method::POST)?;
+        if let Some(link_up_mode) = self.link_up_mode {
+            request.push_query("linkUpMode", link_up_mode.as_str());
+        }
+        request.set_accept(TRANSPORT_CHECK_MEDIA_TYPE);
+        request.set_content_type(TRANSPORT_CHECK_MEDIA_TYPE);
+        request.set_body(body);
+        Ok(request)
+    }
+
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        if response.status() != StatusCode::OK {
+            return Err(ResponseError::UnexpectedStatus {
+                status: response.status(),
+                body: String::from_utf8_lossy(response.body()).into_owned(),
+            });
+        }
+        if response.body().is_empty() {
+            return Err(CtsError::MissingTransportCheckResponse.into());
+        }
+
+        let Some(content_type) = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return Err(ResponseError::MissingContentType {
+                category: TRANSPORT_CHECKS_CATEGORY,
+            });
+        };
+
+        if TransportCheckMediaType::from_media_type(content_type).is_none() {
+            return Err(ResponseError::UnsupportedContentType {
+                category: TRANSPORT_CHECKS_CATEGORY,
+                content_type: content_type.to_owned(),
+                supported: vec![TRANSPORT_CHECK_MEDIA_TYPE.to_owned()],
+            });
+        }
+
+        TransportCheckResult::parse(response.body()).map_err(Into::into)
     }
 }
 

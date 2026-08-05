@@ -203,6 +203,9 @@ pub enum RepositoryError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CtsError {
+    #[error("could not serialize CTS transport check request: {0}")]
+    InvalidTransportCheckRequest(#[source] serde_xml_rs::Error),
+
     #[error("could not serialize CTS transport creation request: {0}")]
     InvalidTransportCreationRequest(#[source] serde_xml_rs::Error),
 
@@ -214,6 +217,9 @@ pub enum CtsError {
 
     #[error("CTS transport creation response did not contain a transport number")]
     MissingTransportCreationResponse,
+
+    #[error("CTS transport check response was empty")]
+    MissingTransportCheckResponse,
 
     #[error("invalid CTS transport creation reference `{reference}`")]
     InvalidTransportCreationReference { reference: String },
