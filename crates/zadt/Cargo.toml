@@ -6,6 +6,10 @@ license = "MIT"
 description = "ADT protocol support for the Ziege ABAP tooling framework"
 repository = "https://github.com/kennyhml/ziege"
 
+[[example]]
+name = "transports"
+required-features = ["reqwest"]
+
 [features]
 default = ["reqwest"]
 logging = ["dep:quick-xml", "dep:tracing"]

@@ -203,8 +203,20 @@ pub enum RepositoryError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CtsError {
+    #[error("could not serialize CTS transport creation request: {0}")]
+    InvalidTransportCreationRequest(#[source] serde_xml_rs::Error),
+
     #[error("invalid CTS transport response: {0}")]
     InvalidTransportResponse(#[source] serde_xml_rs::Error),
+
+    #[error("CTS transport creation response was not valid UTF-8: {0}")]
+    InvalidTransportCreationResponseEncoding(#[source] std::str::Utf8Error),
+
+    #[error("CTS transport creation response did not contain a transport number")]
+    MissingTransportCreationResponse,
+
+    #[error("invalid CTS transport creation reference `{reference}`")]
+    InvalidTransportCreationReference { reference: String },
 }
 
 impl From<AdtLinkError> for ObjectError {
@@ -271,6 +283,9 @@ pub enum OperationError {
 
     #[error(transparent)]
     Repository(#[from] RepositoryError),
+
+    #[error(transparent)]
+    Cts(#[from] CtsError),
 }
 
 /// An error produced while carrying a request through a transport.

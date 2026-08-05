@@ -2,7 +2,8 @@ use std::{env, error::Error, io};
 
 use tracing_subscriber::EnvFilter;
 use zadt::{
-    Class, Client, Operation, Program, ReqwestTransport, TransportExt, TransportsQueryBuilder,
+    Class, Client, Operation, Program, ReqwestTransport, TransportCreateBuilder, TransportExt,
+    TransportsQueryBuilder,
 };
 
 #[tokio::main]
@@ -31,16 +32,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_body_logging(64 * 1024);
     let client = Client::new(transport).discover().await?;
 
-    let query = TransportsQueryBuilder::default()
+    let query = TransportCreateBuilder::default()
+        .package("$TMP")
+        .description("This is a test")
         .build()?
         .execute(&client)
         .await?;
-    let props = query.requests[0]
-        .properties_query()
-        .execute(&client)
-        .await?;
 
-    println!("{:#?}", props);
+    println!("{:#?}", query);
 
     Ok(())
 }

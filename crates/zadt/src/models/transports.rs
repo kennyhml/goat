@@ -1,8 +1,11 @@
 use std::{borrow::Cow, fmt};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::CtsError;
+use crate::{AdtUri, CtsError};
+
+const ABAP_XML_NAMESPACE: &str = "http://www.sap.com/abapxml";
+const LEGACY_TRANSPORT_REFERENCE_PREFIX: &str = "/com.sap.cts/object_record/";
 
 /// The CTS function assigned to a transport request.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -116,6 +119,71 @@ pub struct TransportRequest {
     pub repository_id: Option<String>,
 }
 
+/// The result of creating a CTS transport request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransportCreation {
+    /// The newly created transport request number.
+    pub transport_number: String,
+
+    /// An optional status message returned by integrated change management.
+    pub message: Option<TransportCreationMessage>,
+}
+
+impl TransportCreation {
+    pub(crate) fn parse(body: &[u8]) -> Result<Self, CtsError> {
+        let raw: RawTransportCreation =
+            serde_xml_rs::from_reader(body).map_err(CtsError::InvalidTransportResponse)?;
+        if raw.values.data.transport_number.is_empty() {
+            return Err(CtsError::MissingTransportCreationResponse);
+        }
+
+        let message = raw.values.data.message;
+        Ok(Self {
+            transport_number: raw.values.data.transport_number,
+            message: (!message.severity.is_empty()
+                || !message.short_text.is_empty()
+                || !message.long_text.is_empty())
+            .then_some(TransportCreationMessage {
+                severity: message.severity,
+                short_text: message.short_text,
+                long_text: message.long_text,
+            }),
+        })
+    }
+
+    pub(crate) fn parse_legacy(body: &[u8]) -> Result<Self, CtsError> {
+        let reference = std::str::from_utf8(body)
+            .map_err(CtsError::InvalidTransportCreationResponseEncoding)?
+            .trim();
+        let Some(transport_number) = reference
+            .strip_prefix(LEGACY_TRANSPORT_REFERENCE_PREFIX)
+            .filter(|number| !number.is_empty() && !number.contains('/'))
+        else {
+            return Err(CtsError::InvalidTransportCreationReference {
+                reference: reference.to_owned(),
+            });
+        };
+
+        Ok(Self {
+            transport_number: transport_number.to_owned(),
+            message: None,
+        })
+    }
+}
+
+/// A status message attached to a created transport request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransportCreationMessage {
+    /// The backend-defined message severity.
+    pub severity: String,
+
+    /// The localized short message text.
+    pub short_text: String,
+
+    /// Optional HTML long text.
+    pub long_text: String,
+}
+
 impl TransportRequest {
     pub(crate) fn parse(body: &[u8]) -> Result<Self, CtsError> {
         let raw: RawTransportRequestResponse =
@@ -180,6 +248,64 @@ impl From<RawTransportRequest> for TransportRequest {
 
 fn non_empty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
+}
+
+#[derive(Serialize)]
+#[serde(rename = "asx:abap")]
+pub(crate) struct TransportCreateRequest<'a> {
+    #[serde(rename = "@version")]
+    version: &'static str,
+
+    #[serde(rename = "asx:values")]
+    values: RawTransportCreateValues<'a>,
+}
+
+impl<'a> TransportCreateRequest<'a> {
+    pub(crate) fn new(
+        package: Option<&'a str>,
+        description: &'a str,
+        reference: Option<&'a AdtUri>,
+    ) -> Self {
+        Self {
+            version: "1.0",
+            values: RawTransportCreateValues {
+                data: RawTransportCreateData {
+                    operation: "I",
+                    package: package.unwrap_or_default(),
+                    description,
+                    reference: reference.map(AdtUri::as_str),
+                },
+            },
+        }
+    }
+
+    pub(crate) fn serialize(&self) -> Result<String, CtsError> {
+        serde_xml_rs::SerdeXml::new()
+            .namespace("asx", ABAP_XML_NAMESPACE)
+            .to_string(self)
+            .map_err(CtsError::InvalidTransportCreationRequest)
+    }
+}
+
+#[derive(Serialize)]
+struct RawTransportCreateValues<'a> {
+    #[serde(rename = "DATA")]
+    data: RawTransportCreateData<'a>,
+}
+
+#[derive(Serialize)]
+struct RawTransportCreateData<'a> {
+    #[serde(rename = "OPERATION")]
+    operation: &'static str,
+
+    #[serde(rename = "DEVCLASS")]
+    package: &'a str,
+
+    #[serde(rename = "REQUEST_TEXT")]
+    description: &'a str,
+
+    #[serde(rename = "REF", skip_serializing_if = "Option::is_none")]
+    reference: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -247,6 +373,40 @@ struct RawTransportRequest {
     repository_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename = "asx:abap")]
+struct RawTransportCreation {
+    #[serde(rename = "asx:values")]
+    values: RawTransportCreationValues,
+}
+
+#[derive(Deserialize)]
+struct RawTransportCreationValues {
+    #[serde(rename = "DATA")]
+    data: RawTransportCreationData,
+}
+
+#[derive(Deserialize)]
+struct RawTransportCreationData {
+    #[serde(rename = "TRKORR")]
+    transport_number: String,
+
+    #[serde(rename = "MESSAGE", default)]
+    message: RawTransportCreationMessage,
+}
+
+#[derive(Default, Deserialize)]
+struct RawTransportCreationMessage {
+    #[serde(rename = "SEVERITY", default)]
+    severity: String,
+
+    #[serde(rename = "SHORT_TEXT", default)]
+    short_text: String,
+
+    #[serde(rename = "LONG_TEXT", default)]
+    long_text: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +459,46 @@ mod tests {
             assert_eq!(TransportStatus::parse(value.to_owned()), expected);
         }
         assert_eq!(TransportStatus::parse("Z".to_owned()).as_str(), "Z");
+    }
+
+    #[test]
+    fn serializes_transport_creation_as_asx() {
+        let reference = AdtUri::parse("/sap/bc/adt/packages/zpackage").unwrap();
+        let xml =
+            TransportCreateRequest::new(Some("ZPACKAGE"), "Create <transport>", Some(&reference))
+                .serialize()
+                .unwrap();
+
+        assert!(xml.contains("<OPERATION>I</OPERATION>"));
+        assert!(xml.contains("<DEVCLASS>ZPACKAGE</DEVCLASS>"));
+        assert!(xml.contains("<REQUEST_TEXT>Create &lt;transport&gt;</REQUEST_TEXT>"));
+        assert!(xml.contains("<REF>/sap/bc/adt/packages/zpackage</REF>"));
+    }
+
+    #[test]
+    fn omits_an_unset_transport_reference() {
+        let xml = TransportCreateRequest::new(None, "Create transport", None)
+            .serialize()
+            .unwrap();
+
+        assert!(xml.contains("<DEVCLASS />") || xml.contains("<DEVCLASS></DEVCLASS>"));
+        assert!(!xml.contains("<REF"));
+    }
+
+    #[test]
+    fn parses_modern_and_legacy_transport_creation_responses() {
+        let modern = br#"<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
+            <asx:values><DATA><TRKORR>DEVK900003</TRKORR><MESSAGE>
+            <SEVERITY>WARNING</SEVERITY><SHORT_TEXT>Assigned with warning</SHORT_TEXT>
+            <LONG_TEXT></LONG_TEXT></MESSAGE></DATA></asx:values></asx:abap>"#;
+
+        let modern = TransportCreation::parse(modern).unwrap();
+        assert_eq!(modern.transport_number, "DEVK900003");
+        assert_eq!(modern.message.unwrap().severity, "WARNING");
+
+        let legacy =
+            TransportCreation::parse_legacy(b"/com.sap.cts/object_record/DEVK900004\n").unwrap();
+        assert_eq!(legacy.transport_number, "DEVK900004");
+        assert_eq!(legacy.message, None);
     }
 }

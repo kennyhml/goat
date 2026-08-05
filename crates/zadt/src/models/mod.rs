@@ -10,6 +10,7 @@ pub(crate) use discovery::parse_capabilities;
 pub(crate) use object::parse_lock_handle;
 pub(crate) use repository::RepositoryContentRequest;
 pub(crate) use session::parse_session_information;
+pub(crate) use transports::TransportCreateRequest;
 
 pub use discovery::{Capabilities, Category, Collection, TemplateLink, Workspace};
 pub use object::{AccessMode, LockHandle, SourceCode};
@@ -31,4 +32,7 @@ pub use repository::{
     RepositoryVirtualFolder,
 };
 pub use session::{SessionInformation, SessionUri, SystemInformationLink};
-pub use transports::{TransportKind, TransportRequest, TransportRequests, TransportStatus};
+pub use transports::{
+    TransportCreation, TransportCreationMessage, TransportKind, TransportRequest,
+    TransportRequests, TransportStatus,
+};

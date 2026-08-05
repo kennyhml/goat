@@ -2,9 +2,10 @@ use derive_builder::Builder;
 use http::{Method, StatusCode, header};
 
 use crate::{
-    AdtRequest, CategoryId, Client, MediaVersionNegotiation, ObjectError, Operation,
-    OperationError, OperationResponse, PostAction, Ready, ResponseError, Stateless, TransportKind,
-    TransportRequest, TransportRequests, target::CollectionTarget, vocabulary::query_parameter,
+    AdtRequest, AdtUri, CategoryId, Client, CtsError, MediaVersionNegotiation, ObjectError,
+    Operation, OperationError, OperationResponse, PostAction, Ready, ResponseError, Stateless,
+    TransportCreation, TransportKind, TransportRequest, TransportRequests,
+    models::TransportCreateRequest, target::CollectionTarget, vocabulary::query_parameter,
 };
 
 const TRANSPORTS_CATEGORY: CategoryId = CategoryId {
@@ -12,9 +13,16 @@ const TRANSPORTS_CATEGORY: CategoryId = CategoryId {
     term: "transports",
 };
 const TRANSPORT_REQUESTS_MEDIA_TYPE: &str =
-    "application/vnd.sap.as+xml; charset=utf-8; dataname=com.sap.adt.CorrectionRequests";
+    "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CorrectionRequests";
 const TRANSPORT_REQUEST_MEDIA_TYPE: &str =
-    "application/vnd.sap.as+xml; charset=utf-8; dataname=com.sap.adt.CorrectionRequest";
+    "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CorrectionRequest";
+const TRANSPORT_CREATE_LEGACY_MEDIA_TYPE: &str =
+    "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CreateCorrectionRequest";
+const TRANSPORT_CREATE_V1_MEDIA_TYPE: &str =
+    "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CreateCorrectionRequest.v1";
+const TRANSPORT_CREATE_RESULT_MEDIA_TYPE: &str =
+    "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.CorrectionRequestResult";
+const PLAIN_TEXT_MEDIA_TYPE: &str = "text/plain";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TransportRequestsMediaType;
@@ -35,6 +43,54 @@ impl MediaVersionNegotiation for TransportRequestMediaType {
 
     fn media_type(self) -> &'static str {
         TRANSPORT_REQUEST_MEDIA_TYPE
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TransportCreationMediaType;
+
+impl MediaVersionNegotiation for TransportCreationMediaType {
+    const SUPPORTED: &'static [Self] = &[Self];
+
+    fn media_type(self) -> &'static str {
+        TRANSPORT_CREATE_RESULT_MEDIA_TYPE
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransportCreateMediaVersion {
+    V1,
+    Legacy,
+}
+
+impl MediaVersionNegotiation for TransportCreateMediaVersion {
+    const SUPPORTED: &'static [Self] = &[Self::V1, Self::Legacy];
+
+    fn media_type(self) -> &'static str {
+        match self {
+            Self::V1 => TRANSPORT_CREATE_V1_MEDIA_TYPE,
+            Self::Legacy => TRANSPORT_CREATE_LEGACY_MEDIA_TYPE,
+        }
+    }
+}
+
+impl TransportCreateMediaVersion {
+    fn response_media_type(self) -> &'static str {
+        match self {
+            Self::V1 => TRANSPORT_CREATE_RESULT_MEDIA_TYPE,
+            Self::Legacy => PLAIN_TEXT_MEDIA_TYPE,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PlainTextMediaType;
+
+impl MediaVersionNegotiation for PlainTextMediaType {
+    const SUPPORTED: &'static [Self] = &[Self];
+
+    fn media_type(self) -> &'static str {
+        PLAIN_TEXT_MEDIA_TYPE
     }
 }
 
@@ -232,5 +288,102 @@ impl TransportRequest {
     /// Creates a query that refreshes this transport request's properties.
     pub fn properties_query(&self) -> TransportPropertiesQuery {
         TransportPropertiesQuery::new(self.number.clone())
+    }
+}
+
+/// Creates a CTS transport request.
+///
+/// The modern ASX contract is preferred when advertised by discovery, with a
+/// fallback to the legacy contract. The backend determines whether the created
+/// request is Workbench or Customizing from the referenced object.
+///
+/// Backend handler: `CL_CTS_ADT_RES_OBJ_RECORD`
+#[derive(Builder, Clone, Debug)]
+#[builder(setter(into))]
+pub struct TransportCreate {
+    /// The transport description.
+    description: String,
+
+    /// The package (`DEVCLASS`) used to determine the transport target.
+    #[builder(default, setter(strip_option))]
+    package: Option<String>,
+
+    /// An optional ADT resource that determines the request type and package.
+    #[builder(default, setter(strip_option))]
+    reference: Option<AdtUri>,
+
+    /// A transport layer used when creating a transport for a new package.
+    #[builder(default, setter(strip_option))]
+    transport_layer: Option<String>,
+}
+
+impl TransportCreate {
+    const TARGET: CollectionTarget = CollectionTarget::new(TRANSPORTS_CATEGORY);
+
+    /// Creates a configurable transport request builder.
+    pub fn builder() -> TransportCreateBuilder {
+        TransportCreateBuilder::default()
+    }
+}
+
+impl Operation<Ready> for TransportCreate {
+    type Response = TransportCreation;
+    type Kind = Stateless;
+
+    fn request(&self, client: &Client<Ready>) -> Result<AdtRequest, OperationError> {
+        let collection = Self::TARGET.collection(client)?;
+        let media_version = TransportCreateMediaVersion::negotiate(collection)?;
+        let body = TransportCreateRequest::new(
+            self.package.as_deref(),
+            &self.description,
+            self.reference.as_ref(),
+        )
+        .serialize()?;
+
+        let mut request = AdtRequest::new(Method::POST, collection.target().clone());
+        if let Some(transport_layer) = &self.transport_layer {
+            request.push_query("transportLayer", transport_layer);
+        }
+        request.set_accept(media_version.response_media_type());
+        request.set_content_type(media_version.media_type());
+        request.set_body(body);
+        Ok(request)
+    }
+
+    fn decode(&self, response: OperationResponse) -> Result<Self::Response, ResponseError> {
+        if !response.status().is_success() {
+            return Err(ResponseError::UnexpectedStatus {
+                status: response.status(),
+                body: String::from_utf8_lossy(response.body()).into_owned(),
+            });
+        }
+        if response.body().is_empty() {
+            return Err(CtsError::MissingTransportCreationResponse.into());
+        }
+
+        let Some(content_type) = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return Err(ResponseError::MissingContentType {
+                category: TRANSPORTS_CATEGORY,
+            });
+        };
+
+        if TransportCreationMediaType::from_media_type(content_type).is_some() {
+            TransportCreation::parse(response.body()).map_err(Into::into)
+        } else if PlainTextMediaType::from_media_type(content_type).is_some() {
+            TransportCreation::parse_legacy(response.body()).map_err(Into::into)
+        } else {
+            Err(ResponseError::UnsupportedContentType {
+                category: TRANSPORTS_CATEGORY,
+                content_type: content_type.to_owned(),
+                supported: vec![
+                    TRANSPORT_CREATE_RESULT_MEDIA_TYPE.to_owned(),
+                    PLAIN_TEXT_MEDIA_TYPE.to_owned(),
+                ],
+            })
+        }
     }
 }
