@@ -54,7 +54,7 @@ impl Relation {
     }
 }
 
-/// Actions accepted through ADT's `_action` POST query parameter.
+/// Actions accepted through ADT's `_action` query parameter.
 ///
 /// Values come from `IF_ADT_REST_POST_ACTION`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

@@ -199,6 +199,14 @@ pub enum RepositoryError {
     },
 }
 
+/// An error encoding or decoding Change and Transport System data.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CtsError {
+    #[error("invalid CTS transport response: {0}")]
+    InvalidTransportResponse(#[source] serde_xml_rs::Error),
+}
+
 impl From<AdtLinkError> for ObjectError {
     fn from(error: AdtLinkError) -> Self {
         let (href, source) = error.into_parts();
@@ -241,6 +249,9 @@ pub enum ResponseError {
 
     #[error(transparent)]
     Repository(#[from] RepositoryError),
+
+    #[error(transparent)]
+    Cts(#[from] CtsError),
 }
 
 #[derive(Debug, Error)]

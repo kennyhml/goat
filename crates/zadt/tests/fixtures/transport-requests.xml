@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
+    <asx:values>
+        <DATA>
+            <CTS_REQ_HEADER>
+                <TRKORR>DEVK900001</TRKORR>
+                <TRFUNCTION>K</TRFUNCTION>
+                <TRSTATUS>D</TRSTATUS>
+                <TARSYSTEM />
+                <AS4USER>DEVELOPER</AS4USER>
+                <AS4DATE>2026-08-05</AS4DATE>
+                <AS4TIME>12:00:00</AS4TIME>
+                <AS4TEXT>Workbench request</AS4TEXT>
+                <CLIENT>001</CLIENT>
+                <REPOID />
+            </CTS_REQ_HEADER>
+            <CTS_REQ_HEADER>
+                <TRKORR>DEVK900002</TRKORR>
+                <TRFUNCTION>T</TRFUNCTION>
+                <TRSTATUS>R</TRSTATUS>
+                <TARSYSTEM>QAS</TARSYSTEM>
+                <AS4USER>DEVELOPER</AS4USER>
+                <AS4DATE>2026-08-05</AS4DATE>
+                <AS4TIME>12:30:00</AS4TIME>
+                <AS4TEXT>Transport of copies</AS4TEXT>
+                <CLIENT>001</CLIENT>
+                <REPOID>ABAP</REPOID>
+            </CTS_REQ_HEADER>
+        </DATA>
+    </asx:values>
+</asx:abap>

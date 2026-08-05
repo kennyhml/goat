@@ -4,6 +4,7 @@ mod packages;
 mod programs;
 mod repository;
 mod session;
+mod transports;
 
 pub(crate) use discovery::parse_capabilities;
 pub(crate) use object::parse_lock_handle;
@@ -30,3 +31,4 @@ pub use repository::{
     RepositoryVirtualFolder,
 };
 pub use session::{SessionInformation, SessionUri, SystemInformationLink};
+pub use transports::{TransportKind, TransportRequest, TransportRequests, TransportStatus};
