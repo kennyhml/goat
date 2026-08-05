@@ -329,7 +329,7 @@ fn collection_target(href: &str) -> Result<AdtUri, crate::AdtUriError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vocabulary::{PROGRAM_RUN, PROGRAM_RUN_RELATION, PROGRAMS};
+    use crate::{ObjectCollection, Program};
 
     const DISCOVERY_XML: &[u8] = include_bytes!("../../tests/fixtures/discovery.xml");
     const INVALID_DISCOVERY_XML: &[u8] =
@@ -339,7 +339,7 @@ mod tests {
     fn parses_discovery_capabilities() {
         let capabilities = parse_capabilities(DISCOVERY_XML).unwrap();
         let collection = capabilities
-            .collection(PROGRAMS.scheme, PROGRAMS.term)
+            .collection(Program::CATEGORY.scheme, Program::CATEGORY.term)
             .unwrap();
 
         assert_eq!(capabilities.workspaces()[0].title(), "Programme");
@@ -358,10 +358,13 @@ mod tests {
         );
 
         let run_collection = capabilities
-            .collection(PROGRAM_RUN.scheme, PROGRAM_RUN.term)
+            .collection("http://www.sap.com/adt/categories/programs", "programrun")
             .unwrap();
         let run_template = &run_collection.template_links()[0];
-        assert_eq!(run_template.relation(), PROGRAM_RUN_RELATION);
+        assert_eq!(
+            run_template.relation(),
+            "http://www.sap.com/adt/relations/programs/programrun"
+        );
         assert_eq!(
             run_template.template(),
             "/sap/bc/adt/programs/programrun/{programname}{?profilerId}"

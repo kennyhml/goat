@@ -4,19 +4,21 @@ use crate::{
     AccessMode, LockHandle, LockRequest, UnlockRequest,
     client::{Client, Ready},
     error::ObjectError,
+    resource::SourceRef,
     uri::AdtUri,
     vocabulary::CategoryId,
 };
 
 mod capabilities;
+mod families;
 mod policies;
-mod profiles;
 mod version;
 mod workbench;
 
-pub use capabilities::{ObjectProperties, Source};
+pub(crate) use capabilities::MainSource;
+pub use capabilities::{ObjectProperties, Source, SourceComponent};
+pub use families::{Class, ClassSourceComponent, Include, Package, Program};
 pub use policies::ObjectNamePolicy;
-pub use profiles::{Class, ClassSourceComponent, Include, Package, Program};
 pub use version::ObjectVersion;
 pub use workbench::{GlobalWorkbenchType, InvalidWorkbenchType};
 
@@ -34,6 +36,9 @@ pub trait ObjectType: private::Sealed + Send + Sync + Sized + 'static {
 
     /// The objects naming constraints.
     const NAMING_POLICY: ObjectNamePolicy;
+
+    /// Source components with statically known paths relative to the object.
+    const SOURCE_COMPONENTS: &'static [&'static dyn SourceComponent] = &[];
 }
 
 /// An object type whose canonical collection is advertised through discovery.
@@ -64,6 +69,15 @@ pub trait RepositoryObject: Any + Send + Sync {
     /// Returns the object's global Workbench type.
     fn workbench_type(&self) -> GlobalWorkbenchType;
 
+    /// Returns the source components advertised by this object type.
+    fn source_components(&self) -> &'static [&'static dyn SourceComponent];
+
+    /// Resolves the conventional source component when one is available.
+    fn source(&self) -> Option<SourceRef>;
+
+    /// Resolves a named source component when one is available.
+    fn source_component(&self, name: &str) -> Option<SourceRef>;
+
     /// Creates an object-lock operation.
     fn lock(&self, access_mode: AccessMode) -> LockRequest;
 
@@ -81,6 +95,26 @@ where
 
     fn workbench_type(&self) -> GlobalWorkbenchType {
         T::WORKBENCH_TYPE
+    }
+
+    fn source_components(&self) -> &'static [&'static dyn SourceComponent] {
+        T::SOURCE_COMPONENTS
+    }
+
+    fn source(&self) -> Option<SourceRef> {
+        T::SOURCE_COMPONENTS
+            .iter()
+            .copied()
+            .find(|component| component.is_primary())
+            .map(|component| self.source_from_component(component))
+    }
+
+    fn source_component(&self, name: &str) -> Option<SourceRef> {
+        T::SOURCE_COMPONENTS
+            .iter()
+            .copied()
+            .find(|component| component.name() == name)
+            .map(|component| self.source_from_component(component))
     }
 
     fn lock(&self, access_mode: AccessMode) -> LockRequest {
@@ -135,6 +169,17 @@ impl<T> ObjectRef<T> {
     /// Returns a type-erased copy of this object identity.
     pub fn erase(&self) -> ObjectRef {
         ObjectRef::typed(self.name.clone(), self.uri.clone())
+    }
+
+    pub(crate) fn source_from_component<C>(&self, component: &C) -> SourceRef
+    where
+        C: SourceComponent + ?Sized,
+    {
+        let uri = self
+            .uri()
+            .append_segments(component.path())
+            .expect("static source component path forms a valid ADT URI");
+        SourceRef::new(self.erase(), uri)
     }
 }
 
@@ -221,5 +266,48 @@ mod tests {
         assert_eq!(object.workbench_type(), Program::WORKBENCH_TYPE);
         assert!(object.downcast_ref::<Program>().is_some());
         assert!(object.downcast_ref::<Include>().is_none());
+    }
+
+    #[test]
+    fn repository_object_exposes_source_components_at_runtime() {
+        let class = ObjectRef::<Class>::for_test(
+            "ZCL_TEST",
+            AdtUri::parse("/sap/bc/adt/oo/classes/zcl_test").unwrap(),
+        );
+        let object: &dyn RepositoryObject = &class;
+
+        assert_eq!(
+            object
+                .source_components()
+                .iter()
+                .map(|component| component.name())
+                .collect::<Vec<_>>(),
+            [
+                "main",
+                "definitions",
+                "implementations",
+                "macros",
+                "testclasses",
+            ]
+        );
+        assert_eq!(
+            object.source(),
+            Some(class.component_source(ClassSourceComponent::Main))
+        );
+        assert_eq!(
+            object.source_component("definitions"),
+            Some(class.component_source(ClassSourceComponent::Definitions))
+        );
+        assert!(object.source_component("unknown").is_none());
+
+        let package = ObjectRef::<Package>::for_test(
+            "ZPACKAGE",
+            AdtUri::parse("/sap/bc/adt/packages/zpackage").unwrap(),
+        );
+        let object: &dyn RepositoryObject = &package;
+
+        assert!(object.source_components().is_empty());
+        assert!(object.source().is_none());
+        assert!(object.source_component("main").is_none());
     }
 }

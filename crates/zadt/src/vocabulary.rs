@@ -12,29 +12,6 @@ pub struct CategoryId {
     pub term: &'static str,
 }
 
-pub(crate) const PROGRAMS: CategoryId = CategoryId {
-    scheme: "http://www.sap.com/adt/categories/programs",
-    term: "programs",
-};
-
-pub(crate) const INCLUDES: CategoryId = CategoryId {
-    scheme: "http://www.sap.com/adt/categories/programs",
-    term: "includes",
-};
-
-pub(crate) const PROGRAM_RUN: CategoryId = CategoryId {
-    scheme: "http://www.sap.com/adt/categories/programs",
-    term: "programrun",
-};
-
-pub(crate) const CLASSES: CategoryId = CategoryId {
-    scheme: "http://www.sap.com/adt/categories/oo",
-    term: "classes",
-};
-
-pub(crate) const PROGRAM_RUN_RELATION: &str =
-    "http://www.sap.com/adt/relations/programs/programrun";
-
 /// Relations currently understood in program representations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Relation {

@@ -93,9 +93,9 @@ where
     fn execute(&self, operation: &O) -> impl Future<Output = Result<O::Response, OperationError>> + Send;
 }
 ```
-which means that a `Client` with state `S` can execute operations for state `S`. Cannot be invoked by 
-`Client<Initial>`. This provides a compile time invariant for operations that rely on the discovery 
-data to dispatch. Of course, entry point operations such as the discovery itself, are valid for any client state.
+which means that a `Client` with state `S` can execute operations for state `S`.. This provides a compile 
+time invariant for operations that rely on the discovery data to dispatch. Of course, entry point operations 
+such as the discovery itself, are valid for any client state.
 
 The associated type `Kind` enforces the next invariant, which is calling stateful operations outside
 of a stateful context. To implement that, a user session wraps a client

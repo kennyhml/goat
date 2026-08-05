@@ -72,11 +72,12 @@ impl<T: ObjectType> ObjectRef<T> {
 impl<T: Source> ObjectRef<T> {
     /// Returns the objects conventional source resource.
     pub fn source(&self) -> SourceRef {
-        let uri = self
-            .uri()
-            .append_segments(T::PATH)
-            .expect("static source path segments form a valid ADT URI");
-        SourceRef::new(self.erase(), uri)
+        let component = T::SOURCE_COMPONENTS
+            .iter()
+            .copied()
+            .find(|component| component.is_primary())
+            .expect("Source object types must advertise one primary source component");
+        self.source_from_component(component)
     }
 }
 

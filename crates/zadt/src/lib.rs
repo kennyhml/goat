@@ -56,7 +56,7 @@ pub use models::{
 pub use objects::{
     Class, ClassSourceComponent, GlobalWorkbenchType, Include, InvalidWorkbenchType,
     ObjectCollection, ObjectNamePolicy, ObjectProperties, ObjectRef, ObjectType, ObjectVersion,
-    Package, Program, RepositoryObject, Source,
+    Package, Program, RepositoryObject, Source, SourceComponent,
 };
 pub use operation::{
     BatchError, BatchKey, BatchOperation, BatchResponses, Batched, Execute, IfNoneMatch, Operation,

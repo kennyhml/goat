@@ -10,7 +10,7 @@ use crate::{
     operation::{Operation, OperationResponse, Stateless},
     protocol::AdtRequest,
     target::TemplateTarget,
-    vocabulary::{PROGRAM_RUN, PROGRAM_RUN_RELATION, media_type, query_parameter},
+    vocabulary::{CategoryId, media_type, query_parameter},
 };
 use derive_builder::Builder;
 use http::Method;
@@ -18,6 +18,11 @@ use stduritemplate::Value;
 use url::Url;
 
 const PROGRAM_NAME_VARIABLE: &str = "programname";
+const PROGRAM_RUN_CATEGORY: CategoryId = CategoryId {
+    scheme: "http://www.sap.com/adt/categories/programs",
+    term: "programrun",
+};
+const PROGRAM_RUN_RELATION: &str = "http://www.sap.com/adt/relations/programs/programrun";
 
 /// Fetches program properties using the generic object-properties protocol.
 pub type ProgramPropertiesQuery = ObjectPropertiesQuery<Program>;
@@ -50,7 +55,7 @@ pub struct ProgramRun {
 }
 
 impl ProgramRun {
-    const TARGET: TemplateTarget = TemplateTarget::new(PROGRAM_RUN, PROGRAM_RUN_RELATION);
+    const TARGET: TemplateTarget = TemplateTarget::new(PROGRAM_RUN_CATEGORY, PROGRAM_RUN_RELATION);
 }
 
 impl Operation<Ready> for ProgramRun {
@@ -212,8 +217,8 @@ mod tests {
     use super::*;
     use crate::{
         AdtResponse, CompatibilityError, EntityTag, IncludeProperties, IncludePropertyVersion,
-        MediaVersionNegotiation, ProgramProperties, ProgramPropertiesVersion, Revalidation,
-        vocabulary::PROGRAMS,
+        MediaVersionNegotiation, ObjectCollection, ProgramProperties, ProgramPropertiesVersion,
+        Revalidation,
     };
 
     const PROGRAM_XML: &str = include_str!("../../tests/fixtures/program-z-test.xml");
@@ -361,7 +366,7 @@ mod tests {
         assert!(matches!(
             error,
             OperationError::Compatibility(CompatibilityError::MissingCollection(category))
-                if category == PROGRAM_RUN
+                if category == PROGRAM_RUN_CATEGORY
         ));
     }
 
@@ -419,7 +424,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ResponseError::MissingContentType { category } if category == PROGRAMS
+            ResponseError::MissingContentType { category } if category == Program::CATEGORY
         ));
     }
 
@@ -442,7 +447,7 @@ mod tests {
                 category,
                 content_type,
                 supported,
-            } if category == PROGRAMS
+            } if category == Program::CATEGORY
                 && content_type == "application/json"
                 && supported == [
                     ProgramPropertiesVersion::V3.media_type(),
