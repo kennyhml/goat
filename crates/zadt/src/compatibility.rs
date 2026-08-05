@@ -10,7 +10,7 @@ pub trait MediaVersionNegotiation: Copy + Eq + Send + Sync + 'static {
     /// Media-type versions supported by this client.
     const SUPPORTED: &'static [Self];
 
-    /// Returns the media-type essence identifying this version.
+    /// Returns the media type identifying this version.
     fn media_type(self) -> &'static str;
 
     /// Selects this client's preferred version accepted by a discovered collection.
@@ -27,12 +27,77 @@ pub trait MediaVersionNegotiation: Copy + Eq + Send + Sync + 'static {
     }
 
     /// Reports whether a media type identifies this version.
+    ///
+    /// The default compares the essence case-insensitively and every parameter
+    /// except `charset` by name and value, independently of formatting order.
     fn matches_media_type(self, candidate: &str) -> bool {
-        candidate
-            .split(';')
-            .next()
-            .is_some_and(|v| v.trim().eq_ignore_ascii_case(self.media_type()))
+        media_types_match(self.media_type(), candidate)
     }
+}
+
+struct ParsedMediaType<'a> {
+    essence: &'a str,
+    parameters: Vec<(&'a str, &'a str)>,
+}
+
+fn parse_media_type(value: &str) -> Option<ParsedMediaType<'_>> {
+    let mut parts = value.split(';');
+    let essence = parts.next()?.trim();
+    if essence.is_empty() {
+        return None;
+    }
+
+    let parameters = parts
+        .map(|parameter| {
+            let (name, value) = parameter.split_once('=')?;
+            let name = name.trim();
+            let value = value.trim();
+            (!name.is_empty() && !value.is_empty()).then_some((name, value))
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    Some(ParsedMediaType {
+        essence,
+        parameters,
+    })
+}
+
+fn media_types_match(expected: &str, candidate: &str) -> bool {
+    let (Some(expected), Some(candidate)) =
+        (parse_media_type(expected), parse_media_type(candidate))
+    else {
+        return false;
+    };
+
+    if !expected.essence.eq_ignore_ascii_case(candidate.essence) {
+        return false;
+    }
+
+    let expected_count = expected
+        .parameters
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("charset"))
+        .count();
+    let candidate_count = candidate
+        .parameters
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("charset"))
+        .count();
+
+    expected_count == candidate_count
+        && expected
+            .parameters
+            .iter()
+            .filter(|(name, _)| !name.eq_ignore_ascii_case("charset"))
+            .all(|(expected_name, expected_value)| {
+                candidate
+                    .parameters
+                    .iter()
+                    .any(|(candidate_name, candidate_value)| {
+                        expected_name.eq_ignore_ascii_case(candidate_name)
+                            && expected_value == candidate_value
+                    })
+            })
 }
 
 /// Finds the first preferred media type accepted by the backend.
@@ -104,6 +169,44 @@ mod tests {
         let version = negotiate(&[Version::V3, Version::V2], &accepted).unwrap();
 
         assert_eq!(version, Version::V2);
+    }
+
+    #[test]
+    fn matches_semantic_parameters_independently_of_charset_and_formatting() {
+        let version = Version(
+            "application/vnd.sap.as+xml; charset=utf-8; \
+             dataname=com.sap.adt.CreateCorrectionRequest.v1",
+        );
+
+        assert!(version.matches_media_type(
+            "APPLICATION/VND.SAP.AS+XML;dataname=com.sap.adt.CreateCorrectionRequest.v1; \
+             charset=UTF-8"
+        ));
+    }
+
+    #[test]
+    fn rejects_different_or_unexpected_semantic_parameters() {
+        let legacy = Version(
+            "application/vnd.sap.as+xml; \
+             dataname=com.sap.adt.CreateCorrectionRequest",
+        );
+        let versioned =
+            "application/vnd.sap.as+xml; dataname=com.sap.adt.CreateCorrectionRequest.v1";
+
+        assert!(!legacy.matches_media_type(versioned));
+        assert!(!Version("application/vnd.sap.as+xml").matches_media_type(versioned));
+    }
+
+    #[test]
+    fn matches_version_media_type_parameters_exactly() {
+        let quick_fix = Version("application/vnd.sap.adt.quickfixes.evaluation+xml;version=1.0.0");
+
+        assert!(quick_fix.matches_media_type(
+            "application/vnd.sap.adt.quickfixes.evaluation+xml; version=1.0.0"
+        ));
+        assert!(!quick_fix.matches_media_type(
+            "application/vnd.sap.adt.quickfixes.evaluation+xml; version=2.0.0"
+        ));
     }
 
     #[test]
