@@ -2,7 +2,7 @@ use http::{Method, StatusCode, header};
 
 use crate::{
     client::{Client, Ready},
-    compatibility::NegotiableMediaVersion,
+    compatibility::MediaVersionNegotiation,
     error::{OperationError, ResponseError},
     objects::{ObjectProperties, ObjectRef, ObjectVersion},
     operation::{IfNoneMatch, Operation, OperationResponse, Stateless},
@@ -13,7 +13,7 @@ use crate::{
 
 /// Fetches a versioned ADT object-properties representation.
 ///
-/// The operation uses the target resource's endpoint and is generic over `T`
+/// The operation uses the target resources endpoint and is generic over `T`
 /// so it can negotiate and parse that resource's properties representation.
 #[derive(Debug)]
 pub struct ObjectPropertiesQuery<T>
@@ -132,7 +132,7 @@ impl<T: ObjectProperties> ObjectRef<T> {
         T::parse(self, version, body, etag)
     }
 
-    /// Creates an unconditional query for this object's properties.
+    /// Creates a property query for this object
     pub fn query(&self) -> ObjectPropertiesQuery<T> {
         ObjectPropertiesQuery::new(self.clone())
     }

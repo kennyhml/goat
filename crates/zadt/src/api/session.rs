@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use http::{HeaderValue, Method, StatusCode, header};
 
 use crate::{
-    AdtRequest, Client, ClientState, LogonError, NegotiableMediaVersion, Operation, OperationError,
-    OperationResponse, ResponseError, SessionInformation, Stateless,
+    AdtRequest, Client, ClientState, LogonError, MediaVersionNegotiation, Operation,
+    OperationError, OperationResponse, ResponseError, SessionInformation, Stateless,
     models::parse_session_information,
     target::HTTP_SESSIONS,
     vocabulary::{
@@ -20,7 +20,7 @@ impl SessionMediaVersion {
     pub const V3: Self = Self("application/vnd.sap.adt.core.http.session.v3+xml");
 }
 
-impl NegotiableMediaVersion for SessionMediaVersion {
+impl MediaVersionNegotiation for SessionMediaVersion {
     const SUPPORTED: &'static [Self] = &[Self::V3];
 
     fn media_type(self) -> &'static str {

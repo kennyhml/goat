@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::{Execute, Operation, OperationKind, Stateful, Stateless, UserSession};
 use crate::{
     AdtRequest, AdtResponse, AdtUri, CategoryId, Client, CompatibilityError,
-    NegotiableMediaVersion, OperationError, OperationResponse, Ready, ResponseError,
+    MediaVersionNegotiation, OperationError, OperationResponse, Ready, ResponseError,
 };
 
 const BATCH_CATEGORY: CategoryId = CategoryId {
@@ -24,7 +24,7 @@ enum BatchMediaVersion {
     MultipartMixed,
 }
 
-impl NegotiableMediaVersion for BatchMediaVersion {
+impl MediaVersionNegotiation for BatchMediaVersion {
     const SUPPORTED: &'static [Self] = &[Self::MultipartMixed];
 
     fn media_type(self) -> &'static str {

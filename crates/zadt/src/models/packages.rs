@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::{
-    AdtUri, EntityTag, GlobalWorkbenchType, NegotiableMediaVersion, ObjectError, ObjectRef,
+    AdtUri, EntityTag, GlobalWorkbenchType, MediaVersionNegotiation, ObjectError, ObjectRef,
     ObjectType, ObjectVersion, Package, ResponseError,
     resource::{AdvertisedLink, Relations, resolve_href},
 };
@@ -20,7 +20,7 @@ pub enum PackagePropertiesVersion {
     V2,
 }
 
-impl NegotiableMediaVersion for PackagePropertiesVersion {
+impl MediaVersionNegotiation for PackagePropertiesVersion {
     const SUPPORTED: &'static [Self] = &[Self::V2, Self::V1];
 
     fn media_type(self) -> &'static str {

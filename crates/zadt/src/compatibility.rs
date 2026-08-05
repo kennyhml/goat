@@ -1,35 +1,12 @@
-//! Negotiation and validation of compatibility between the client and ADT backends.
-//!
-//! This includes media-type negotiation and advertised compatibility graphs,
-//! which can differ between SAP releases.
-
 use thiserror::Error;
 
 use crate::{CategoryId, Collection};
-
-/// An error establishing protocol compatibility with an ADT backend.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum CompatibilityError {
-    /// Central discovery did not advertise a required collection.
-    #[error("ADT discovery did not advertise collection {0:?}")]
-    MissingCollection(CategoryId),
-
-    /// The client and backend have no mutually supported media type.
-    #[error(
-        "none of the preferred media types {preferred:?} are accepted by the backend: {accepted:?}"
-    )]
-    NoCompatibleMediaType {
-        preferred: Vec<String>,
-        accepted: Vec<String>,
-    },
-}
 
 /// Describes media-type versions that can participate in content negotiation.
 ///
 /// [`negotiate`] selects between the caller's preferred versions and
 /// the representations advertised by the server.
-pub trait NegotiableMediaVersion: Copy + Eq + Send + Sync + 'static {
+pub trait MediaVersionNegotiation: Copy + Eq + Send + Sync + 'static {
     /// Media-type versions supported by this client.
     const SUPPORTED: &'static [Self];
 
@@ -61,7 +38,7 @@ pub trait NegotiableMediaVersion: Copy + Eq + Send + Sync + 'static {
 /// Finds the first preferred media type accepted by the backend.
 pub fn negotiate<V>(preferred: &[V], accepted: &[String]) -> Result<V, CompatibilityError>
 where
-    V: NegotiableMediaVersion,
+    V: MediaVersionNegotiation,
 {
     let candidates: Vec<V> = accepted
         .iter()
@@ -82,6 +59,24 @@ where
         })
 }
 
+/// An error establishing protocol compatibility with an ADT backend.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CompatibilityError {
+    /// Central discovery did not advertise a required collection.
+    #[error("ADT discovery did not advertise collection {0:?}")]
+    MissingCollection(CategoryId),
+
+    /// The client and backend have no mutually supported media type.
+    #[error(
+        "none of the preferred media types {preferred:?} are accepted by the backend: {accepted:?}"
+    )]
+    NoCompatibleMediaType {
+        preferred: Vec<String>,
+        accepted: Vec<String>,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,7 +89,7 @@ mod tests {
         const V3: Self = Self("application/vnd.test.v3+xml");
     }
 
-    impl NegotiableMediaVersion for Version {
+    impl MediaVersionNegotiation for Version {
         const SUPPORTED: &'static [Self] = &[Self::V3, Self::V2];
 
         fn media_type(self) -> &'static str {

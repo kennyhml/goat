@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 use crate::{
     AdtUri, EnhancementImplementationsRef, EntityTag, GlobalWorkbenchType, HtmlSourceRef, Include,
-    NegotiableMediaVersion, ObjectEnhancementOptionsRef, ObjectError, ObjectRef, ObjectStateRef,
+    MediaVersionNegotiation, ObjectEnhancementOptionsRef, ObjectError, ObjectRef, ObjectStateRef,
     ObjectStructureRef, ObjectType, ObjectVersion, ParserRef, Program, ResponseError,
     SourceEnhancementOptionsRef, SourceRef, SourceVersionsRef, TextElementsRef,
     objects::Package,
@@ -16,7 +16,7 @@ pub struct ProgramPropertiesVersion {
     kind: ProgramPropertiesVersionKind,
 }
 
-impl NegotiableMediaVersion for ProgramPropertiesVersion {
+impl MediaVersionNegotiation for ProgramPropertiesVersion {
     const SUPPORTED: &'static [Self] = &[Self::V3, Self::V2];
 
     fn media_type(self) -> &'static str {
@@ -92,7 +92,7 @@ pub enum IncludePropertyVersion {
     V2,
 }
 
-impl NegotiableMediaVersion for IncludePropertyVersion {
+impl MediaVersionNegotiation for IncludePropertyVersion {
     const SUPPORTED: &'static [Self] = &[Self::V2];
 
     fn media_type(self) -> &'static str {

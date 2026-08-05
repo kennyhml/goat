@@ -33,7 +33,7 @@ pub use api::repository::{
 };
 pub use api::session::{Logon, SessionMediaVersion};
 pub use client::{Client, ClientState, Initial, Ready};
-pub use compatibility::{CompatibilityError, NegotiableMediaVersion, negotiate};
+pub use compatibility::{CompatibilityError, MediaVersionNegotiation, negotiate};
 #[cfg(feature = "reqwest")]
 pub use error::ReqwestTransportBuildError;
 pub use error::{
